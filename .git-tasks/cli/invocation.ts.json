@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "file": "cli/invocation.ts",
+  "entries": [
+    {
+      "id": "c0ffee03-aabb-4ccc-9ddd-3e4f5a6b7c8d",
+      "type": "issue",
+      "commitSHA": "0000000000000000000000000000000000000000",
+      "line": 14,
+      "lineContent": "    execSync('command -v git-tasks >/dev/null 2>&1', { shell: '/bin/sh' });",
+      "text": "Path resolution uses POSIX-only `command -v` and `/bin/sh`. On Windows the hooks installed via `git-tasks install-hooks` will not be invoked correctly. Add a Windows-aware branch (use `where` and `cmd /c`, or just always emit the absolute node-path fallback when `process.platform === 'win32'`).",
+      "author": "git-tasks team",
+      "createdAt": "2026-06-17T16:00:00.000Z",
+      "updatedAt": "2026-06-17T16:00:00.000Z",
+      "status": "open",
+      "priority": "medium",
+      "severity": "major",
+      "tags": ["windows", "portability"]
+    }
+  ]
+}

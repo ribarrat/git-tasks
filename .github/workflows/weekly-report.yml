@@ -1,0 +1,73 @@
+name: Weekly git-tasks report
+
+# Scheduled SLA report. Runs `git-tasks stats` once a week and publishes
+# the output as a workflow step summary. Fails if any critical annotation
+# has been open for more than --sla-days, so it becomes a recurring nudge
+# rather than something the team has to remember to run.
+
+on:
+  schedule:
+    - cron: '0 13 * * 1' # Every Monday 13:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run compile
+
+      - name: Print stats to step summary
+        run: |
+          {
+            echo "## :bar_chart: Weekly git-tasks report"
+            echo ""
+            echo '```'
+            node out/cli/index.js stats --sla-days 30
+            echo '```'
+            echo ""
+            echo "<details><summary>JSON</summary>"
+            echo ""
+            echo '```json'
+            node out/cli/index.js stats --json --sla-days 30
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any critical annotation has been open > 30 days
+        run: node out/cli/index.js stats --sla-days 30 --fail-on-aged-critical
+
+      - name: Open or update tracking issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TITLE="Weekly git-tasks SLA: aged critical annotations"
+          MARKER="<!-- git-tasks-weekly-sla -->"
+          BODY_FILE=$(mktemp)
+          {
+            echo "$MARKER"
+            echo "Weekly git-tasks scan found one or more **critical** annotations open for more than 30 days."
+            echo ""
+            echo '```'
+            node out/cli/index.js stats --sla-days 30 || true
+            echo '```'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE"
+          else
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE" --label "git-tasks,sla"
+          fi

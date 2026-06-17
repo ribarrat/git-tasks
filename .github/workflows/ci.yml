@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  build:
+    name: Build (tsc) + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npm test
+
+  pre-merge-check:
+    name: Pre-merge git-tasks check (PR gate)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      - name: Reconcile sanity — fail on stale or orphan annotations
+        run: node out/cli/index.js check --fail-on stale,orphan
+
+      - name: Block PRs that introduce open critical issues on changed files
+        run: |
+          node out/cli/index.js check \
+            --fail-on-open-severity critical \
+            --base origin/${{ github.base_ref }}
+
+      # Emit GitHub Checks API annotations so every git-tasks entry on the
+      # changed files appears as an inline warning/error directly in the
+      # PR's Files Changed tab.
+      - name: Inline annotations on diff
+        if: always()
+        run: node out/cli/index.js diff --base origin/${{ github.base_ref }} --github-annotations
+
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "## git-tasks pre-merge report"
+            echo ""
+            echo "### Annotations on files changed in this PR"
+            echo ""
+            node out/cli/index.js diff --base origin/${{ github.base_ref }} || true
+            echo ""
+            echo "### Reconcile / check"
+            echo ""
+            echo '```json'
+            node out/cli/index.js check --format json --base origin/${{ github.base_ref }} || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post sticky PR comment
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -e
+          MARKER="<!-- git-tasks-pr-report -->"
+
+          # Build the comment body.
+          BODY_FILE=$(mktemp)
+          {
+            echo "$MARKER"
+            echo "## :clipboard: git-tasks report"
+            echo ""
+            BODY=$(node out/cli/index.js diff --base origin/$BASE_REF)
+            if [ -n "$BODY" ]; then
+              echo "$BODY"
+            else
+              echo "_No annotations on files changed in this PR._"
+            fi
+            echo ""
+            echo "<details><summary>Reconcile / check (JSON)</summary>"
+            echo ""
+            echo '```json'
+            node out/cli/index.js check --format json --base origin/$BASE_REF
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "_Updated by the git-tasks CI job._"
+          } > "$BODY_FILE"
+
+          # Find an existing sticky comment to update; otherwise post new.
+          EXISTING_ID=$(gh api "/repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0].id // empty")
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api -X PATCH "/repos/${{ github.repository }}/issues/comments/$EXISTING_ID" \
+              -f body="$(cat "$BODY_FILE")" > /dev/null
+            echo "Updated existing sticky comment."
+          else
+            gh pr comment "$PR_NUMBER" --body-file "$BODY_FILE" > /dev/null
+            echo "Posted new sticky comment."
+          fi
+
+  post-merge-audit:
+    name: Post-merge audit on main
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      # Reconcile in-place. If anything is auto-moved on main itself, it means
+      # a contributor merged without the pre-commit / post-merge hooks installed.
+      # We fail the audit so the team notices.
+      - name: Reconcile on main
+        run: node out/cli/index.js reconcile
+
+      - name: Fail audit if reconcile touched annotations on main
+        run: |
+          if ! git diff --quiet -- .git-tasks 2>/dev/null; then
+            echo "::error::Reconcile applied moves to annotations on main."
+            echo "A contributor merged without local hooks (\`git-tasks install-hooks\`)."
+            echo ""
+            echo "Diff:"
+            git --no-pager diff -- .git-tasks
+            exit 1
+          fi
+
+      - name: Final check
+        run: node out/cli/index.js check --fail-on stale,orphan

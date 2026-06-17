@@ -1,0 +1,83 @@
+{
+  "name": "git-tasks",
+  "displayName": "Git Tasks",
+  "description": "Annotate code with tasks, comments, and issues stored in your Git repo",
+  "version": "0.1.0",
+  "publisher": "git-tasks",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["workspaceContains:.git"],
+  "main": "./out/src/extension.js",
+  "bin": {
+    "git-tasks": "./out/cli/index.js"
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "build-cli": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "pretest": "npm run compile",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vitest/coverage-v8": "^3.2.0",
+    "typescript": "^5.3.0",
+    "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "contributes": {
+    "commands": [
+      { "command": "git-tasks.addAnnotation", "title": "Git Tasks: Add Annotation", "icon": "$(add)" },
+      { "command": "git-tasks.editAnnotation", "title": "Git Tasks: Edit Annotation" },
+      { "command": "git-tasks.resolveAnnotation", "title": "Git Tasks: Resolve Annotation" },
+      { "command": "git-tasks.deleteAnnotation", "title": "Git Tasks: Delete Annotation" },
+      { "command": "git-tasks.refreshPanel", "title": "Git Tasks: Refresh", "icon": "$(refresh)" },
+      { "command": "git-tasks.reconcile", "title": "Git Tasks: Reconcile (relocate drifted)", "icon": "$(sync)" },
+      { "command": "git-tasks.filterByStatus", "title": "Git Tasks: Filter by Status", "icon": "$(filter)" },
+      { "command": "git-tasks.filterByType", "title": "Git Tasks: Filter by Type", "icon": "$(symbol-misc)" },
+      { "command": "git-tasks.filterAssignedToMe", "title": "Git Tasks: Filter Assigned to Me", "icon": "$(person)" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "git-tasks",
+          "title": "Git Tasks",
+          "icon": "resources/icons/activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "git-tasks": [
+        { "id": "gitTasksPanel", "name": "Annotations" }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        { "command": "git-tasks.addAnnotation", "group": "navigation" }
+      ],
+      "view/title": [
+        { "command": "git-tasks.addAnnotation", "when": "view == gitTasksPanel", "group": "navigation@1" },
+        { "command": "git-tasks.refreshPanel", "when": "view == gitTasksPanel", "group": "navigation@2" },
+        { "command": "git-tasks.reconcile", "when": "view == gitTasksPanel", "group": "navigation@2.5" },
+        { "command": "git-tasks.filterByStatus", "when": "view == gitTasksPanel", "group": "navigation@3" },
+        { "command": "git-tasks.filterByType", "when": "view == gitTasksPanel", "group": "navigation@4" },
+        { "command": "git-tasks.filterAssignedToMe", "when": "view == gitTasksPanel", "group": "navigation@5" }
+      ],
+      "view/item/context": [
+        { "command": "git-tasks.editAnnotation", "when": "view == gitTasksPanel && viewItem == annotation", "group": "inline@1" },
+        { "command": "git-tasks.resolveAnnotation", "when": "view == gitTasksPanel && viewItem == annotation", "group": "inline@2" },
+        { "command": "git-tasks.deleteAnnotation", "when": "view == gitTasksPanel && viewItem == annotation", "group": "inline@3" }
+      ]
+    }
+  }
+}

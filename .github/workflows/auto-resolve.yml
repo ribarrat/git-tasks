@@ -1,0 +1,63 @@
+name: Auto-resolve git-tasks on merge
+
+# When a PR is merged to main, scan the merge commit message for
+#   closes git-tasks: <id>
+# (or `gt-closes <id>`) and resolve the matching annotations in a
+# bot-authored follow-up commit. Same UX as `closes #123` for issues,
+# but for line-pinned annotations.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  auto-resolve:
+    runs-on: ubuntu-latest
+    if: github.event.head_commit.message != ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run compile
+
+      - name: Resolve referenced annotations
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -e
+          # Extract every <id> (or prefix) following "closes git-tasks:" or "gt-closes".
+          # IDs may be the full UUID or a >=4-char prefix.
+          IDS=$(printf '%s' "$MSG" | grep -oiE '(closes git-tasks:|gt-closes)[[:space:]]*[0-9a-f-]+' | awk '{print $NF}' | sort -u)
+          if [ -z "$IDS" ]; then
+            echo "No closes git-tasks references in commit message."
+            exit 0
+          fi
+          echo "Found IDs to resolve:"
+          echo "$IDS"
+          for id in $IDS; do
+            node out/cli/index.js update "$id" --status resolved || echo "  (no match for $id, skipping)"
+          done
+
+      - name: Commit resolved annotations
+        run: |
+          set -e
+          if git diff --quiet -- .git-tasks; then
+            echo "No annotation changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .git-tasks
+          git commit -m "chore(git-tasks): auto-resolve referenced annotations [skip ci]"
+          git push

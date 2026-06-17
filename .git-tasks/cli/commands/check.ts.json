@@ -1,0 +1,22 @@
+{
+  "version": "1.0",
+  "file": "cli/commands/check.ts",
+  "entries": [
+    {
+      "id": "c0ffee02-9b3d-4f22-bc44-2a3b4c5d6e7f",
+      "type": "task",
+      "commitSHA": "0000000000000000000000000000000000000000",
+      "line": 54,
+      "lineContent": "      if (!failSeverities.includes(e.entry.severity)) continue;",
+      "text": "Today --fail-on-open-severity matches severities exactly. Support comparator semantics (>=) so `--fail-on-open-severity major` also catches `critical`. Ordering: critical > major > minor > trivial.",
+      "author": "git-tasks team",
+      "assignee": "claude",
+      "createdAt": "2026-06-17T16:00:00.000Z",
+      "updatedAt": "2026-06-17T16:00:00.000Z",
+      "status": "open",
+      "priority": "low",
+      "severity": "minor",
+      "tags": ["enhancement", "cli", "onboarding"]
+    }
+  ]
+}

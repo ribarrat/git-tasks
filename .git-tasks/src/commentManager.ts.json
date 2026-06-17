@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "file": "src/commentManager.ts",
+  "entries": [
+    {
+      "id": "c0ffee01-7a5c-4d11-9d3c-1f0e1b2a3c4d",
+      "type": "task",
+      "commitSHA": "0000000000000000000000000000000000000000",
+      "line": 321,
+      "lineContent": "  threshold = 0.7,",
+      "text": "Make the soft-match LCS threshold configurable via a CLI flag (e.g. `git-tasks reconcile --soft-match-threshold 0.8`) and a workspace setting. 0.7 is a reasonable default but teams with very rigid style guides may want to tighten it.",
+      "author": "git-tasks team",
+      "assignee": "claude",
+      "createdAt": "2026-06-17T16:00:00.000Z",
+      "updatedAt": "2026-06-17T16:00:00.000Z",
+      "status": "open",
+      "priority": "medium",
+      "severity": "minor",
+      "tags": ["enhancement", "reconcile", "good-first-issue", "onboarding"]
+    },
+    {
+      "id": "c0ffee04-1234-4abc-9def-5e6f7a8b9c0d",
+      "type": "comment",
+      "commitSHA": "0000000000000000000000000000000000000000",
+      "line": 533,
+      "lineContent": "export function mergeAnnotationFiles(",
+      "text": "ADR — three-way JSON merge strategy. We merge `.git-tasks/<file>.json` by entry `id`, doing field-wise three-way merge for entries edited on both sides (`updatedAt` is the tiebreaker for scalar fields; `tags` are unioned). This avoids textual JSON conflicts when two branches simply add new entries to the same file, and keeps last-writer-wins predictable. Rejected alternatives: (a) entry-wise last-writer-wins (loses concurrent field edits), (b) prompt user on every concurrent edit (kills the zero-friction merge UX). If this decision ever changes, the change must update `mergeEntry` and the README \"How concurrent edits to the same JSON file are merged\" section together.",
+      "author": "git-tasks team",
+      "createdAt": "2026-06-17T16:00:00.000Z",
+      "updatedAt": "2026-06-17T16:00:00.000Z",
+      "status": "open",
+      "priority": "low",
+      "severity": "trivial",
+      "tags": ["adr", "merge-driver", "onboarding"]
+    }
+  ]
+}
