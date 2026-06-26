@@ -132,7 +132,7 @@ A `pretest` npm hook re-runs `tsc` so the CLI integration tests always exercise 
 
 ![Task created](docs/images/task-created.png "Displated upon hovering over line")
 
-![Sidebar panel](sidebar-tasks.png "Sidebar panel displays all tasks")
+![Sidebar panel](docs/images/sidebar-tasks.png "Sidebar panel displays all tasks")
 
 Icons in the gutter:
 
