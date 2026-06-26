@@ -1,4 +1,4 @@
-import { updateEntry } from '../../src/commentManager';
+import { updateEntry } from '../../src/taskManager';
 import {
   AnnotationEntry,
   EntryPriority,

@@ -19,7 +19,7 @@ import {
   removeEntry,
   softMatchSnapshot,
   updateEntry,
-} from '../src/commentManager';
+} from '../src/taskManager';
 import { AnnotationEntry, AnnotationFile } from '../src/types';
 import { TempRepo, makeTempRepo } from './helpers';
 
@@ -44,7 +44,7 @@ function seedEntry(overrides: Partial<AnnotationEntry> = {}): AnnotationEntry {
   });
 }
 
-describe('commentManager — pure helpers', () => {
+describe('taskManager — pure helpers', () => {
   describe('createEntry', () => {
     it('applies defaults for status/priority/severity', () => {
       const e = createEntry({
@@ -211,7 +211,7 @@ describe('commentManager — pure helpers', () => {
   });
 });
 
-describe('commentManager — on-disk operations', () => {
+describe('taskManager — on-disk operations', () => {
   let repo: TempRepo;
   beforeEach(() => {
     repo = makeTempRepo();
@@ -322,7 +322,7 @@ describe('commentManager — on-disk operations', () => {
   });
 });
 
-describe('commentManager — reconcileEntry / reconcileAll', () => {
+describe('taskManager — reconcileEntry / reconcileAll', () => {
   let repo: TempRepo;
   beforeEach(() => {
     repo = makeTempRepo();
@@ -413,7 +413,7 @@ describe('commentManager — reconcileEntry / reconcileAll', () => {
   });
 });
 
-describe('commentManager — three-way merge', () => {
+describe('taskManager — three-way merge', () => {
   const baseEntry = (): AnnotationEntry => ({
     id: 'fixed-id-1',
     type: 'task',

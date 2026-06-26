@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { mergeAnnotationFiles } from '../../src/commentManager';
+import { mergeAnnotationFiles } from '../../src/taskManager';
 import { AnnotationFile, SCHEMA_VERSION } from '../../src/types';
 import { red } from '../util';
 

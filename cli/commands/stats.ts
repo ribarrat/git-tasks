@@ -1,4 +1,4 @@
-import { listAllEntries } from '../../src/commentManager';
+import { listAllEntries } from '../../src/taskManager';
 import { AnnotationEntry, EntrySeverity } from '../../src/types';
 import { bold, dim, ensureRepoRoot, red, shortId, truncate } from '../util';
 

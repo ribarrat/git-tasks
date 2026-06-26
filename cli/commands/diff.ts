@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { listAllEntries } from '../../src/commentManager';
+import { listAllEntries } from '../../src/taskManager';
 import { AnnotationEntry } from '../../src/types';
 import { bold, dim, ensureRepoRoot, red, shortId, truncate } from '../util';
 

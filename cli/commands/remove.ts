@@ -1,5 +1,5 @@
 import * as readline from 'node:readline';
-import { findEntryById, removeEntry } from '../../src/commentManager';
+import { findEntryById, removeEntry } from '../../src/taskManager';
 import { ensureRepoRoot, red, shortId } from '../util';
 
 interface RemoveOpts {

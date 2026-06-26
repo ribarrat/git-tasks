@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { AnnotationEntry } from './types';
-import { isDrifted } from './commentManager';
+import { isDrifted } from './taskManager';
 import { isCurrentUser } from './gitHelper';
 
 interface DecoSet {

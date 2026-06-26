@@ -15,6 +15,7 @@ import {
 import { runMergeDriver } from './commands/mergeDriver';
 import { runDiff } from './commands/diff';
 import { runStats } from './commands/stats';
+import { runPurge } from './commands/purge';
 
 const program = new Command();
 program
@@ -125,6 +126,16 @@ program
   .option('--sla-days <n>', 'Age threshold in days for "aged open" (default 30)', '30')
   .option('--fail-on-aged-critical', 'Exit non-zero if any critical annotation has been open longer than --sla-days')
   .action((opts) => runStats(opts));
+
+program
+  .command('purge')
+  .description('Delete all resolved/closed tasks in bulk. Dry-run by default — add --apply to actually delete.')
+  .option('--status <list>', 'Comma-separated statuses to purge (default: resolved,closed)')
+  .option('--older-than <days>', 'Only purge tasks whose updatedAt is older than N days')
+  .option('--apply', 'Actually delete (without this flag the command is a dry run)')
+  .option('--force', 'Skip confirmation prompt (use in CI)')
+  .option('--json', 'Output matched tasks as JSON (before deletion when combined with --apply)')
+  .action((opts) => runPurge(opts));
 
 program
   .command('merge-driver')

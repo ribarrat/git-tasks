@@ -1,4 +1,4 @@
-import { reconcileAll, ReconcileReport } from '../../src/commentManager';
+import { reconcileAll, ReconcileReport } from '../../src/taskManager';
 import { bold, dim, ensureRepoRoot, shortId } from '../util';
 
 interface ReconcileOpts {

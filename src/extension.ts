@@ -20,7 +20,7 @@ import {
   reconcileAll,
   removeEntry,
   updateEntry,
-} from './commentManager';
+} from './taskManager';
 import {
   getCurrentCommitSHA,
   getUserEmail,
@@ -54,6 +54,28 @@ function relPath(uri: vscode.Uri): string | undefined {
   return rel.split(path.sep).join('/');
 }
 
+function updateLineHasAnnotationContext(): void {
+  let lineHasAnnotation = false;
+  const editor = vscode.window.activeTextEditor;
+  if (editor && repoRoot) {
+    const rel = relPath(editor.document.uri);
+    if (rel) {
+      const af = loadAnnotationFile(repoRoot, rel);
+      if (af && af.entries.length > 0) {
+        const ln = editor.selection.start.line + 1;
+        lineHasAnnotation = af.entries.some(
+          (e) => ln >= e.line && ln <= (e.endLine ?? e.line),
+        );
+      }
+    }
+  }
+  void vscode.commands.executeCommand(
+    'setContext',
+    'gitTasks.lineHasAnnotation',
+    lineHasAnnotation,
+  );
+}
+
 function refreshActiveEditor(): void {
   const editor = vscode.window.activeTextEditor;
   if (!editor || !repoRoot || !gutter) return;
@@ -67,7 +89,13 @@ function refreshActiveEditor(): void {
     gutter.clear(editor);
     return;
   }
-  gutter.apply(editor, repoRoot, af.entries);
+  const showResolved = vscode.workspace
+    .getConfiguration('git-tasks')
+    .get<boolean>('showResolved', false);
+  const entries = showResolved
+    ? af.entries
+    : af.entries.filter((e) => e.status !== 'resolved');
+  gutter.apply(editor, repoRoot, entries);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -105,16 +133,27 @@ export function activate(context: vscode.ExtensionContext): void {
     onAnnotationsChanged: () => {
       refreshActiveEditor();
       sidebar?.refresh();
+      updateLineHasAnnotationContext();
     },
   });
   context.subscriptions.push(watcher);
 
   context.subscriptions.push(
-    vscode.window.onDidChangeActiveTextEditor(() => refreshActiveEditor()),
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      refreshActiveEditor();
+      updateLineHasAnnotationContext();
+    }),
+    vscode.window.onDidChangeTextEditorSelection(() => updateLineHasAnnotationContext()),
     vscode.workspace.onDidChangeTextDocument((e) => {
       const editor = vscode.window.activeTextEditor;
       if (editor && e.document === editor.document) {
         refreshActiveEditor();
+      }
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('git-tasks.showResolved')) {
+        refreshActiveEditor();
+        sidebar?.refresh();
       }
     }),
   );
@@ -122,6 +161,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initial paint.
   refreshActiveEditor();
   sidebar.refresh();
+  updateLineHasAnnotationContext();
 
   registerCommands(context);
 }
@@ -131,6 +171,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('git-tasks.addAnnotation', addAnnotationCmd),
     vscode.commands.registerCommand('git-tasks.editAnnotation', editAnnotationCmd),
     vscode.commands.registerCommand('git-tasks.resolveAnnotation', resolveAnnotationCmd),
+    vscode.commands.registerCommand('git-tasks.reopenAnnotation', reopenAnnotationCmd),
     vscode.commands.registerCommand('git-tasks.deleteAnnotation', deleteAnnotationCmd),
     vscode.commands.registerCommand('git-tasks.refreshPanel', () => {
       sidebar?.refresh();
@@ -210,7 +251,7 @@ async function addAnnotationCmd(): Promise<void> {
   if (!type) return;
 
   const text = await vscode.window.showInputBox({
-    prompt: 'Annotation text',
+    prompt: 'Task text',
     placeHolder: 'Describe the task / comment / issue',
   });
   if (!text) return;
@@ -291,14 +332,14 @@ async function pickEntryId(arg: unknown): Promise<string | undefined> {
               description: m.endLine ? `L${m.line}-${m.endLine}` : `L${m.line}`,
               id: m.id,
             })),
-            { placeHolder: 'Multiple annotations on this line' },
+            { placeHolder: 'Multiple tasks on this line' },
           );
           return pick?.id;
         }
       }
     }
   }
-  vscode.window.showWarningMessage('git-tasks: no annotation found.');
+  vscode.window.showWarningMessage('git-tasks: no task found.');
   return undefined;
 }
 
@@ -308,7 +349,7 @@ async function editAnnotationCmd(arg?: unknown): Promise<void> {
   if (!id) return;
   const found = findEntryById(repoRoot, id);
   if (!found) {
-    vscode.window.showWarningMessage('git-tasks: annotation not found.');
+    vscode.window.showWarningMessage('git-tasks: task not found.');
     return;
   }
   const newText = await vscode.window.showInputBox({
@@ -335,7 +376,17 @@ async function resolveAnnotationCmd(arg?: unknown): Promise<void> {
   updateEntry(repoRoot, id, { status: 'resolved' });
   refreshActiveEditor();
   sidebar?.refresh();
-  vscode.window.showInformationMessage('git-tasks: annotation resolved.');
+  vscode.window.showInformationMessage('git-tasks: task resolved.');
+}
+
+async function reopenAnnotationCmd(arg?: unknown): Promise<void> {
+  if (!repoRoot) return;
+  const id = await pickEntryId(arg);
+  if (!id) return;
+  updateEntry(repoRoot, id, { status: 'open' });
+  refreshActiveEditor();
+  sidebar?.refresh();
+  vscode.window.showInformationMessage('git-tasks: task reopened.');
 }
 
 async function deleteAnnotationCmd(arg?: unknown): Promise<void> {
@@ -343,7 +394,7 @@ async function deleteAnnotationCmd(arg?: unknown): Promise<void> {
   const id = await pickEntryId(arg);
   if (!id) return;
   const confirm = await vscode.window.showWarningMessage(
-    'Delete this annotation?',
+    'Delete this task?',
     { modal: true },
     'Delete',
   );
@@ -373,7 +424,7 @@ async function filterAssignedToMeCmd(): Promise<void> {
   const current = sidebar?.getFilter().assignedToMe ?? false;
   sidebar?.setFilter({ assignedToMe: !current });
   vscode.window.showInformationMessage(
-    `git-tasks: ${!current ? 'showing only annotations assigned to you' : 'showing all annotations'}`,
+    `git-tasks: ${!current ? 'showing only tasks assigned to you' : 'showing all tasks'}`,
   );
 }
 

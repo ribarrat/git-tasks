@@ -1,4 +1,4 @@
-import { listAllAnnotationFiles } from '../../src/commentManager';
+import { listAllAnnotationFiles } from '../../src/taskManager';
 import { AnnotationEntry, EntryPriority, EntryStatus, EntryType } from '../../src/types';
 import { isCurrentUser } from '../../src/gitHelper';
 import { bold, dim, ensureRepoRoot, relPathFromRepoArg, shortId, truncate } from '../util';

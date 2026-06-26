@@ -59,16 +59,21 @@ This works because the repo includes `.vscode/launch.json` configured with an `e
 
 ### CLI
 
+Once published to npm:
+
 ```bash
 npm install -g git-tasks
 ```
 
-During development:
+During development (in the repo root):
 
 ```bash
-npm run build-cli
-node out/cli/index.js list
+npm run compile
+npm link          # symlinks `git-tasks` → out/cli/index.js globally
+git-tasks list    # works in any terminal from here on
 ```
+
+To remove the symlink when done: `npm unlink git-tasks`.
 
 ---
 
@@ -108,8 +113,26 @@ A `pretest` npm hook re-runs `tsc` so the CLI integration tests always exercise 
 
 1. Select one or more lines in any file inside a Git repository.
 2. Run **Git Tasks: Add Annotation** from the command palette (or the right-click menu).
+
+![Right-click menu](docs/images/right-click-menu.png "New option in menu")
+
 3. Pick a type, enter your text, set priority/severity/assignee/tags.
+
+![Select type](docs/images/select-type.png "Select the type")
+
+![Enter text](docs/images/enter-text.png "Enter the text of the task")
+
+![Select priority](docs/images/select-priority.png "Select the priority")
+
+![Select severity](docs/images/select-severity.png "Select the severity")
+
+![Set assignee](docs/images/set-assignee.png "Assign to someone")
+
 4. The annotation appears as a gutter icon and in the **Git Tasks** sidebar panel.
+
+![Task created](docs/images/task-created.png "Displated upon hovering over line")
+
+![Sidebar panel](sidebar-tasks.png "Sidebar panel displays all tasks")
 
 Icons in the gutter:
 
@@ -120,6 +143,14 @@ Icons in the gutter:
 | ◆ (red) | issue |
 | ⚠ (amber) | drift — file content has changed since the annotation was written |
 | accent ring | annotation is assigned to **you** (matched against `git config user.name`/`user.email`) |
+
+Issue example:
+
+![Issue example](docs/images/issue-example.png "Issue example")
+
+Task example:
+
+![Task example](docs/images/task-example.png "Task example")
 
 ### CLI
 
@@ -204,6 +235,7 @@ Commit the `.git-tasks/` folder into your repo so teammates can pull and immedia
 | `git-tasks check [--fail-on …] [--fail-on-open-severity …] [--base <ref>] [--format json]` | CI gate over reconcile + open-severity rules |
 | `git-tasks diff --base <ref> [--json] [--github-annotations]` | List annotations on files changed since `<ref>`; emit GitHub Checks inline annotations |
 | `git-tasks stats [--sla-days <n>] [--fail-on-aged-critical] [--json]` | Density + SLA report aggregated by file, type, status, severity |
+| `git-tasks purge [--status resolved,closed] [--older-than <days>] [--apply] [--force] [--json]` | Bulk-delete terminal tasks. Dry-run by default; `--apply` to actually delete |
 | `git-tasks install-hooks` / `uninstall-hooks` | Manage pre-commit / post-merge / post-checkout hooks |
 | `git-tasks install-merge-driver` / `uninstall-merge-driver` | Manage the three-way JSON merge driver for `.git-tasks/**/*.json` |
 

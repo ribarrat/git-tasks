@@ -3,7 +3,7 @@ import {
   listAllEntries,
   reconcileAll,
   ReconcileReport,
-} from '../../src/commentManager';
+} from '../../src/taskManager';
 import { AnnotationEntry, EntrySeverity } from '../../src/types';
 import { bold, dim, ensureRepoRoot, red, shortId } from '../util';
 

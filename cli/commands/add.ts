@@ -4,7 +4,7 @@ import {
   addEntry,
   createEntry,
   extractLineContent,
-} from '../../src/commentManager';
+} from '../../src/taskManager';
 import {
   EntryPriority,
   EntrySeverity,

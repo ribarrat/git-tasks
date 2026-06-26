@@ -6,7 +6,7 @@ import {
   EntryStatus,
   EntryType,
 } from './types';
-import { listAllAnnotationFiles, reconcileEntry } from './commentManager';
+import { listAllAnnotationFiles, reconcileEntry } from './taskManager';
 import { isCurrentUser } from './gitHelper';
 
 type Node = FileNode | EntryNode;
@@ -19,13 +19,12 @@ class FileNode extends vscode.TreeItem {
   ) {
     super(filePath, vscode.TreeItemCollapsibleState.Expanded);
     this.iconPath = new vscode.ThemeIcon('file');
-    this.description = `${entries.length} annotation${entries.length === 1 ? '' : 's'}`;
+    this.description = `${entries.length} task${entries.length === 1 ? '' : 's'}`;
     this.id = `file:${filePath}`;
   }
 }
 
 class EntryNode extends vscode.TreeItem {
-  contextValue = 'annotation';
   constructor(
     public readonly filePath: string,
     public readonly entry: AnnotationEntry,
@@ -43,6 +42,7 @@ class EntryNode extends vscode.TreeItem {
     this.id = `entry:${entry.id}`;
     this.description = `${range} · ${entry.type} · ${entry.priority} · ${entry.status}${driftBadge}`;
     this.tooltip = entry.text;
+    this.contextValue = entry.status === 'resolved' ? 'annotation:resolved' : 'annotation:open';
 
     const iconFile = EntryNode.iconForType(entry.type);
     this.iconPath = vscode.Uri.file(
@@ -164,6 +164,14 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
     }
     if (this.filter.assignedToMe && !isCurrentUser(repoRoot, e.assignee)) {
       return false;
+    }
+    // Hide resolved unless the user explicitly asked to see them (config flag,
+    // or status filter set to 'resolved' — handled by the first check above).
+    if (e.status === 'resolved' && this.filter.status !== 'resolved') {
+      const showResolved = vscode.workspace
+        .getConfiguration('git-tasks')
+        .get<boolean>('showResolved', false);
+      if (!showResolved) return false;
     }
     return true;
   }

@@ -1,4 +1,4 @@
-import { findEntryById } from '../../src/commentManager';
+import { findEntryById } from '../../src/taskManager';
 import { isCurrentUser } from '../../src/gitHelper';
 import { bold, dim, ensureRepoRoot, red } from '../util';
 

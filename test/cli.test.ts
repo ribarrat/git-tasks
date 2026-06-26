@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { addEntry, createEntry } from '../src/commentManager';
+import { addEntry, createEntry } from '../src/taskManager';
 import { AnnotationEntry } from '../src/types';
 import { CLI_PATH, TempRepo, makeTempRepo, runCli, runCliAllowFail } from './helpers';
 
@@ -280,5 +280,71 @@ describe('CLI — diff', () => {
     const { status, stderr } = runCliAllowFail(repo.root, ['diff']);
     expect(status).not.toBe(0);
     expect(stderr.toLowerCase()).toContain('base');
+  });
+});
+
+describe('CLI — purge', () => {
+  let repo: TempRepo;
+  beforeEach(() => {
+    repo = makeTempRepo();
+    repo.writeFile(SAMPLE_PATH, SAMPLE_CONTENT);
+    repo.commitAll('seed sample');
+  });
+  afterEach(() => repo.cleanup());
+
+  it('dry run (no --apply) lists candidates without deleting', () => {
+    seed(repo, { status: 'resolved', text: 'done task' });
+    seed(repo, { status: 'open', text: 'still open' });
+    const { status, stdout } = runCli(repo.root, ['purge']);
+    expect(status).toBe(0);
+    expect(stdout).toContain('done task');
+    expect(stdout).not.toContain('still open');
+    // Entry still on disk
+    const remaining = runCli(repo.root, ['list', '--json']);
+    expect(JSON.parse(remaining.stdout)).toHaveLength(2);
+  });
+
+  it('--apply removes resolved and closed tasks', () => {
+    const r = seed(repo, { status: 'resolved', text: 'resolved task' });
+    const c = seed(repo, { status: 'closed', text: 'closed task' });
+    seed(repo, { status: 'open', text: 'open task' });
+    const { status, stdout } = runCliAllowFail(repo.root, ['purge', '--apply', '--force']);
+    expect(status).toBe(0);
+    expect(stdout).toContain('Purged 2');
+    const remaining = JSON.parse(runCli(repo.root, ['list', '--json']).stdout);
+    expect(remaining.map((e: { id: string }) => e.id)).not.toContain(r.id);
+    expect(remaining.map((e: { id: string }) => e.id)).not.toContain(c.id);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].text).toBe('open task');
+  });
+
+  it('--status limits which statuses are purged', () => {
+    seed(repo, { status: 'resolved', text: 'resolved' });
+    seed(repo, { status: 'closed', text: 'closed' });
+    runCliAllowFail(repo.root, ['purge', '--apply', '--force', '--status', 'resolved']);
+    const remaining = JSON.parse(runCli(repo.root, ['list', '--json']).stdout);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].status).toBe('closed');
+  });
+
+  it('--older-than skips recently updated tasks', () => {
+    seed(repo, { status: 'resolved', text: 'fresh resolved' });
+    const { stdout } = runCli(repo.root, ['purge', '--older-than', '30']);
+    expect(stdout).toContain('nothing to purge');
+  });
+
+  it('--json outputs matched tasks before deletion', () => {
+    seed(repo, { status: 'resolved', text: 'to purge' });
+    const { stdout } = runCli(repo.root, ['purge', '--json']);
+    const hits = JSON.parse(stdout);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].status).toBe('resolved');
+  });
+
+  it('reports nothing to purge when no candidates match', () => {
+    seed(repo, { status: 'open' });
+    const { status, stdout } = runCli(repo.root, ['purge']);
+    expect(status).toBe(0);
+    expect(stdout).toContain('nothing to purge');
   });
 });
