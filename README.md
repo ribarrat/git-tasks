@@ -91,7 +91,7 @@ What's covered:
 
 | Layer | File | Approach |
 |---|---|---|
-| Annotation engine (`src/commentManager.ts`) | `test/commentManager.test.ts` | Unit tests for the pure helpers (`extractLineContent`, `findSnapshotIn`, `softMatchSnapshot`, three-way merge) and on-disk lifecycle (`addEntry` → `updateEntry` → `removeEntry`, `reconcileAll` against a real temp repo). |
+| Annotation engine (`src/taskManager.ts`) | `test/taskManager.test.ts` | Unit tests for the pure helpers (`extractLineContent`, `findSnapshotIn`, `softMatchSnapshot`, three-way merge) and on-disk lifecycle (`addEntry` → `updateEntry` → `removeEntry`, `reconcileAll` against a real temp repo). |
 | Git helper (`src/gitHelper.ts`) | `test/gitHelper.test.ts` | Runs against a real temp `git init` repo — no mocks — to verify `findRepoRoot`, `getCurrentCommitSHA`, `isCurrentUser`, etc. |
 | CLI (`cli/commands/*`) | `test/cli.test.ts` | Shells out to the compiled `out/cli/index.js` inside a temp repo and asserts exit codes, JSON shape, and on-disk state. Focused on the commands that pipelines depend on: `list`, `show`, `update`, `remove`, `reconcile`, `check`, `diff`. |
 
@@ -352,12 +352,12 @@ Four real entries pinned to current source — every CI integration below operat
 
 | File:line | Type | Tags | Showcases |
 |---|---|---|---|
-| `src/commentManager.ts:321` | task | `enhancement, good-first-issue, onboarding` | AI-agent + onboarding workflow (assigned to `claude`) |
-| `src/commentManager.ts:533` | comment | `adr, merge-driver, onboarding` | **ADR pinned to the line that encodes the decision** — reorganising the merge driver triggers drift on this entry |
+| `src/taskManager.ts:321` | task | `enhancement, good-first-issue, onboarding` | AI-agent + onboarding workflow (assigned to `claude`) |
+| `src/taskManager.ts:533` | comment | `merge-driver, onboarding` | **Annotation pinned to the line it describes** — reorganising the merge driver triggers drift on this entry |
 | `cli/commands/check.ts:54` | task | `enhancement, cli, onboarding` | AI-agent task with a concrete implementation hint |
 | `cli/invocation.ts:14` | issue (`severity: major`) | `windows, portability` | CI's `--fail-on-open-severity critical --base …` gate (triggers when a PR also edits this file) |
 
-Try `git-tasks list --mine`, `git-tasks list --tag onboarding`, or `git-tasks list --tag adr` after cloning.
+Try `git-tasks list --mine`, `git-tasks list --tag onboarding`, or `git-tasks list --tag merge-driver` after cloning.
 
 ### Workflows (`.github/workflows/`)
 
@@ -396,7 +396,7 @@ Adjust `--base origin/<your-default-branch>` in `ci.yml` if your default isn't `
 Once annotations live in the repo as structured JSON, the same data file plugs into almost every stage of the development lifecycle. Each of the ideas below is a thin reader on top of `.git-tasks/*.json` — no new schema, no new service.
 
 > :sparkles: **Five of these ideas already ship as the template wired up in this repo** — see the [dogfooding tables above](#how-this-repo-dogfoods-git-tasks):
-> Checks-API inline annotations + sticky PR comment (`ci.yml`), auto-resolve on `closes git-tasks: <id>` (`auto-resolve.yml`), scheduled SLA report (`weekly-report.yml`), the `git-tasks diff` and `git-tasks stats` commands, an ADR pinned to the line that encodes it, and an `--tag onboarding` walkthrough. Copy the workflow files and you have the same setup in your repo.
+> Checks-API inline annotations + sticky PR comment (`ci.yml`), auto-resolve on `closes git-tasks: <id>` (`auto-resolve.yml`), scheduled SLA report (`weekly-report.yml`), the `git-tasks diff` and `git-tasks stats` commands, an annotation pinned to the line it describes, and an `--tag onboarding` walkthrough. Copy the workflow files and you have the same setup in your repo.
 
 ### PR review (biggest visibility lift)
 
@@ -433,7 +433,7 @@ Once annotations live in the repo as structured JSON, the same data file plugs i
 
 ### Planning, docs, onboarding
 
-- **Architecture Decision Records that can't rot.** Tag entries `adr` and pin them to the line where the decision is encoded. If someone replaces the algorithm later, drift detection surfaces the ADR as `stale` and forces a re-decision instead of silently lying.
+- **Annotations that can't rot.** Pin a comment to the line where a non-obvious decision or assumption lives. If someone replaces that code later, drift detection surfaces the note as `stale` and forces a fresh look instead of silently lying.
 - **Guided onboarding.** `git-tasks list --tag onboarding` produces an in-codebase tour for new hires, walked through in order.
 
 ### AI agents (compounds with everything else)

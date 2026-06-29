@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "file": "src/commentManager.ts",
+  "file": "src/taskManager.ts",
   "entries": [
     {
       "id": "c0ffee01-7a5c-4d11-9d3c-1f0e1b2a3c4d",
@@ -24,14 +24,14 @@
       "commitSHA": "0000000000000000000000000000000000000000",
       "line": 533,
       "lineContent": "export function mergeAnnotationFiles(",
-      "text": "ADR — three-way JSON merge strategy. We merge `.git-tasks/<file>.json` by entry `id`, doing field-wise three-way merge for entries edited on both sides (`updatedAt` is the tiebreaker for scalar fields; `tags` are unioned). This avoids textual JSON conflicts when two branches simply add new entries to the same file, and keeps last-writer-wins predictable. Rejected alternatives: (a) entry-wise last-writer-wins (loses concurrent field edits), (b) prompt user on every concurrent edit (kills the zero-friction merge UX). If this decision ever changes, the change must update `mergeEntry` and the README \"How concurrent edits to the same JSON file are merged\" section together.",
+      "text": "Three-way JSON merge strategy. We merge `.git-tasks/<file>.json` by entry `id`, doing field-wise three-way merge for entries edited on both sides (`updatedAt` is the tiebreaker for scalar fields; `tags` are unioned). This avoids textual JSON conflicts when two branches simply add new entries to the same file, and keeps last-writer-wins predictable. Rejected alternatives: (a) entry-wise last-writer-wins (loses concurrent field edits), (b) prompt user on every concurrent edit (kills the zero-friction merge UX). If this changes, update `mergeEntry` and the README \"git-tasks install-merge-driver\" section (under \"Surviving PR merges and conflicts\") together.",
       "author": "git-tasks team",
       "createdAt": "2026-06-17T16:00:00.000Z",
-      "updatedAt": "2026-06-17T16:00:00.000Z",
+      "updatedAt": "2026-06-28T00:00:00.000Z",
       "status": "open",
       "priority": "low",
       "severity": "trivial",
-      "tags": ["adr", "merge-driver", "onboarding"]
+      "tags": ["merge-driver", "onboarding"]
     }
   ]
 }
