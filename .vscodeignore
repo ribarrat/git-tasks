@@ -1,0 +1,15 @@
+.vscode/**
+.github/**
+.claude/**
+.git-tasks/**
+src/**
+test/**
+docs/**
+out/**/*.map
+.gitignore
+tsconfig.json
+vitest.config.ts
+package-lock.json
+**/*.ts
+**/tsconfig.json
+**/.eslintrc*

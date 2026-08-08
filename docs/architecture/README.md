@@ -18,7 +18,3 @@ Start at **Level 1** if you're new — it answers "what problem does this solve 
 - Diagrams are written in [Mermaid](https://mermaid.js.org/) so they render on GitHub and stay diffable.
 - "Person" boxes (👤) are human or AI actors. "System" boxes are git-tasks-owned. "External" boxes are systems we integrate with but do not own.
 - Arrows are labelled with the *purpose* of the call, not the protocol.
-
-## Source of truth
-
-These documents describe the codebase as it stands. When the implementation changes, update the relevant level. The annotation *schema* is canonically defined in [`src/types.ts`](../../src/types.ts) — the diagrams here reference it but do not redefine it.
