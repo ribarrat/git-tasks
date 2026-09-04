@@ -194,17 +194,18 @@ Each annotated source file gets its own JSON file under `.git-tasks/`, mirroring
 
 ```jsonc
 {
-  "version": "1.0",
+  "version": "1.1",
   "file": "src/utils/auth.js",
   "entries": [
     {
       "id": "<uuid-v4>",
       "type": "task",                      // task | comment | issue
       "commitSHA": "<40-char SHA>",
-      "line": 42,
+      "line": 42,                          // current position, updated by reconcile
       "endLine": 48,                       // optional: only on multi-line selections
-      "lineContent": "const user = ...",   // snapshot for drift detection
+      "lineContent": "const user = ...",   // snapshot of the lines at `line`
       "text": "This query has no index — could be slow under load",
+      "description": "Confirmed on staging: 1.2s p99 …",  // optional, longer context
       "author": "Riccardo Barrat",
       "assignee": "alice@example.com",     // optional
       "createdAt": "2026-06-16T10:00:00Z",
@@ -212,7 +213,12 @@ Each annotated source file gets its own JSON file under `.git-tasks/`, mirroring
       "status": "open",                    // open | in-progress | resolved | closed
       "priority": "high",                  // high | medium | low
       "severity": "major",                 // critical | major | minor | trivial
-      "tags": ["perf", "security"]
+      "tags": ["perf", "security"],
+      "origin": {                          // where it was first pinned; never rewritten
+        "line": 17,
+        "lineContent": "const user = ...",
+        "commitSHA": "<40-char SHA>"
+      }
     }
   ]
 }
@@ -226,10 +232,10 @@ Commit the `.git-tasks/` folder into your repo so teammates can pull and immedia
 
 | Command | What it does |
 |---------|--------------|
-| `git-tasks add <file> <line>[-<endLine>] --type … --text …` | Add a single- or multi-line annotation |
+| `git-tasks add <file> <line>[-<endLine>] --type … --text … [--description …]` | Add a single- or multi-line annotation |
 | `git-tasks list [<file>] [--type] [--status] [--priority] [--assignee] [--mine] [--json]` | List annotations, with filters |
 | `git-tasks show <id>` | Show one annotation in full |
-| `git-tasks update <id> [--text] [--status] [--priority] [--severity] [--assignee] [--tags]` | Update fields |
+| `git-tasks update <id> [--text] [--description] [--status] [--priority] [--severity] [--assignee] [--tags]` | Update fields (`--description ""` clears it) |
 | `git-tasks remove <id> [--force]` | Delete |
 | `git-tasks reconcile [--dry-run] [--quiet] [--json]` | Relocate drifted annotations; report stale / orphan |
 | `git-tasks check [--fail-on …] [--fail-on-open-severity …] [--base <ref>] [--format json]` | CI gate over reconcile + open-severity rules |
@@ -245,9 +251,79 @@ Rows where `assignee` matches the current git user are prefixed with `→` and b
 
 ---
 
+## Title and description
+
+`text` is the one-line title shown in the gutter hover, the sidebar, and `list`. `description` is optional and holds the longer context — why the task exists, acceptance criteria, links.
+
+Descriptions are **markdown, and may span multiple lines**:
+
+```markdown
+p99 is 1.2s on staging under the reporting load.
+
+- [ ] add a covering index on (tenant_id, created_at)
+- [ ] re-measure before closing
+
+Dashboard: [grafana](https://example.com/d)
+```
+
+A single newline renders as a line break (not folded away as plain markdown would), and blank-line paragraphs, lists, quotes and fenced code blocks all render as written. Markdown links are clickable in the hover.
+
+**Writing one in VS Code.** The description prompt is a normal input box for a quick one-liner. Since <kbd>Enter</kbd> submits an input box, anything longer goes through the **pencil button → "Edit in editor…"**, which opens a scratch `DESCRIPTION.md` pre-filled with the current text and a short instruction banner:
+
+- **Save the file** (<kbd>⌘S</kbd> / <kbd>Ctrl+S</kbd>) to apply it. The banner is stripped automatically; your own HTML comments are kept.
+- **Close it without saving** to leave the description unchanged — the rest of the task is preserved, not discarded.
+
+The buffer lives in a temp directory and is cleaned up either way; the task itself is written to `.git-tasks/`, never to the temp file.
+
+**Writing one from the CLI.** `--description` accepts embedded newlines, and `--description-file` reads a file (or `-` for stdin), which is usually easier from a script:
+
+```bash
+git-tasks add src/db.js 42 --type issue --text "Missing index" \
+  --description-file notes.md
+
+git-tasks update 4ba96e --description-file - <<'EOF'
+Confirmed on staging.
+See [dashboard](https://example.com/d).
+EOF
+```
+
+`--description ""` clears the field.
+
+> **A note on trust.** Task files arrive over `git pull`, so their text is written by whoever committed it. The hover renders user content with HTML escaped and scopes clickable `command:` links to git-tasks' own five commands, so a `[click me](command:…)` link injected into a task body does nothing. Sidebar tooltips render task text literally, without markdown.
+
+---
+
 ## How drift detection works
 
-When you create an annotation, the lines covered by it are stored verbatim in `lineContent`. If the file is later edited and the live content of those lines no longer matches, the gutter icon switches to an amber `⚠` and the hover tooltip notes that the lines may have moved. The `commitSHA` field also records the exact commit you were on when the annotation was written, so you can always recover the original context via `git show <sha>:<file>`.
+When you create an annotation, the lines covered by it are stored verbatim in `lineContent`. If the file is later edited and the live content of those lines no longer matches, the gutter icon switches to an amber `⚠` and the hover tooltip notes that the lines may have moved.
+
+### Original vs. current position
+
+An annotation carries two positions:
+
+- **`line` / `lineContent`** — where it lives *now*. Reconcile updates these as the code moves, so the gutter icon always sits next to the right line.
+- **`origin`** — where it was *first* pinned (`line`, `endLine`, `lineContent`, `commitSHA`), captured at creation and never rewritten afterwards.
+
+That split is what stops routine editing from degrading a task. Inserting lines above an annotation shifts it, but the relocation is bookkeeping, not loss: `git-tasks show` prints both positions, the hover reads *"Line 42 · originally 17"*, and the sidebar appends `(from L17)`. The original commit is still on record, so `git show <origin.commitSHA>:<file>` recovers the exact context the note was written against.
+
+Entries created before schema 1.1 have no `origin`. The first time such an entry relocates, its current position is frozen as the origin — the oldest position that can still be proven.
+
+### When relocation happens
+
+Drift is only a problem for as long as it goes uncorrected. Reconcile runs automatically at four points:
+
+| Trigger | Covers | Needs |
+|---|---|---|
+| **On save** (VS Code) | the file you are editing right now | nothing — built into the extension |
+| **`pre-commit` hook** | everything staged in a commit | `git-tasks install-hooks` |
+| **`post-merge` / `post-checkout` hooks** | pulls, merges, branch switches | `git-tasks install-hooks` |
+| **Merge driver** | entries whose lines moved in a merge that also edited the task file | `git-tasks install-merge-driver` |
+
+The merge driver reconciles positions against the worktree copy of the source right after merging the JSON, and skips the file if git left conflict markers in it.
+
+One caveat worth knowing: git only invokes a merge driver when **both** sides modified that same `.git-tasks/*.json` file. Line drift usually comes from source edits alone, which leave the task file untouched on one side — git then resolves it trivially and the driver never runs. So the driver is a useful extra pass, not the safety net; **`post-merge` is what actually covers merges**, which is why `install-hooks` matters more than `install-merge-driver` for keeping drift down.
+
+If the hooks are missing, the VS Code extension offers to install them once per workspace (or run **Git Tasks: Install Git Hooks** from the command palette). Hooks run in a bare shell, so the `git-tasks` CLI must be installed globally for them to work.
 
 ---
 

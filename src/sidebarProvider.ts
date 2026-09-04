@@ -40,8 +40,21 @@ class EntryNode extends vscode.TreeItem {
     const short = entry.text.length > 60 ? entry.text.slice(0, 57) + '…' : entry.text;
     super(`${mineMarker}${short}`, vscode.TreeItemCollapsibleState.None);
     this.id = `entry:${entry.id}`;
-    this.description = `${range} · ${entry.type} · ${entry.priority} · ${entry.status}${driftBadge}`;
-    this.tooltip = entry.text;
+    const origin = entry.origin;
+    const movedFrom =
+      origin && origin.line !== entry.line ? ` (from L${origin.line})` : '';
+    this.description = `${range}${movedFrom} · ${entry.type} · ${entry.priority} · ${entry.status}${driftBadge}`;
+    // appendText escapes markdown, so a task body pulled from the repo renders
+    // as written and cannot inject links or commands into the tooltip.
+    const tooltip = new vscode.MarkdownString();
+    tooltip.appendMarkdown('**');
+    tooltip.appendText(entry.text);
+    tooltip.appendMarkdown('**');
+    if (entry.description) {
+      tooltip.appendMarkdown('\n\n');
+      tooltip.appendText(entry.description);
+    }
+    this.tooltip = tooltip;
     this.contextValue = entry.status === 'resolved' ? 'annotation:resolved' : 'annotation:open';
 
     const iconFile = EntryNode.iconForType(entry.type);

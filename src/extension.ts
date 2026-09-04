@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   AnnotationEntry,
@@ -18,9 +20,12 @@ import {
   findEntryById,
   loadAnnotationFile,
   reconcileAll,
+  reconcileFile,
   removeEntry,
   updateEntry,
 } from './taskManager';
+import { findGitTasksOnPath, hooksInstalled, installHooks } from './hooks';
+import { DESCRIPTION_HEADER, stripDescriptionHeader } from './description';
 import {
   getCurrentCommitSHA,
   getUserEmail,
@@ -98,6 +103,194 @@ function refreshActiveEditor(): void {
   gutter.apply(editor, repoRoot, entries);
 }
 
+
+// ---------- Description input ----------
+
+/**
+ * Open a scratch markdown buffer holding the current description. Saving the
+ * file applies it; closing it without saving cancels. Save is the gesture the
+ * editor already trains you to use, so it is the one that commits the text —
+ * a notification button would be missed, and missing it would look like the
+ * edit silently vanished.
+ */
+async function editDescriptionInEditor(initial: string): Promise<string | undefined> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-tasks-desc-'));
+  const file = path.join(dir, 'DESCRIPTION.md');
+  fs.writeFileSync(file, DESCRIPTION_HEADER + initial, 'utf8');
+
+  const uri = vscode.Uri.file(file);
+  const doc = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(doc, { preview: false });
+
+  const isOurs = (d: vscode.TextDocument): boolean => d.uri.fsPath === uri.fsPath;
+
+  const result = await new Promise<string | undefined>((resolve) => {
+    let settled = false;
+    const settle = (value: string | undefined) => {
+      if (settled) return;
+      settled = true;
+      saveSub.dispose();
+      closeSub.dispose();
+      resolve(value);
+    };
+    const saveSub = vscode.workspace.onDidSaveTextDocument((d) => {
+      if (isOurs(d)) settle(stripDescriptionHeader(d.getText()));
+    });
+    const closeSub = vscode.workspace.onDidCloseTextDocument((d) => {
+      // Closing after a save also fires this; `settled` keeps the save result.
+      if (isOurs(d)) settle(undefined);
+    });
+  });
+
+  await closeDescriptionEditor(doc);
+  fs.rmSync(dir, { recursive: true, force: true });
+  return result;
+}
+
+/**
+ * Close the scratch editor if it is still open. It has just been saved (or is
+ * being abandoned), so this never prompts about unsaved work.
+ */
+async function closeDescriptionEditor(doc: vscode.TextDocument): Promise<void> {
+  const stillOpen = vscode.window.visibleTextEditors.some(
+    (e) => e.document.uri.fsPath === doc.uri.fsPath,
+  );
+  if (!stillOpen) return;
+  try {
+    await vscode.window.showTextDocument(doc, { preview: false });
+    await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+  } catch {
+    // Best effort — the user may have closed it in the meantime.
+  }
+}
+
+/**
+ * Prompt for a description. The inline box stays the fast path for a one-line
+ * note; the button escapes to a real editor when the text needs line breaks,
+ * lists or links, which `showInputBox` cannot accept (Enter submits it).
+ */
+async function promptDescription(initial: string): Promise<string | undefined> {
+  const box = vscode.window.createInputBox();
+  box.title = 'Description (optional)';
+  box.value = initial;
+  box.placeholder = 'Longer context — why, acceptance criteria, links';
+  box.prompt = 'Press Enter to accept, or use the pencil for multi-line markdown';
+  const editButton: vscode.QuickInputButton = {
+    iconPath: new vscode.ThemeIcon('edit'),
+    tooltip: 'Edit in editor…',
+  };
+  box.buttons = [editButton];
+
+  try {
+    const action = await new Promise<
+      { kind: 'accept'; value: string } | { kind: 'editor'; value: string } | undefined
+    >((resolve) => {
+      let settled = false;
+      const settle = (
+        v: { kind: 'accept'; value: string } | { kind: 'editor'; value: string } | undefined,
+      ) => {
+        if (settled) return;
+        settled = true;
+        resolve(v);
+      };
+      box.onDidAccept(() => settle({ kind: 'accept', value: box.value }));
+      box.onDidTriggerButton(() => settle({ kind: 'editor', value: box.value }));
+      box.onDidHide(() => settle(undefined));
+      box.show();
+    });
+
+    if (!action) return undefined;
+    box.hide();
+    if (action.kind === 'accept') return action.value.trim();
+
+    const edited = await editDescriptionInEditor(action.value);
+    if (edited !== undefined) return edited;
+    // Closing the scratch buffer means "I didn't write one", not "throw the
+    // task away" — keep what was already typed and say so, rather than
+    // aborting the whole flow with nothing to show for it.
+    vscode.window.showInformationMessage(
+      'git-tasks: description editor closed without saving — description left unchanged.',
+    );
+    return action.value.trim();
+  } finally {
+    box.dispose();
+  }
+}
+
+/**
+ * Settle drift for one file the moment it is saved. Inserting lines above a
+ * task shifts it every time; without this the gutter stays flagged for the
+ * whole editing session and only clears at the next commit or merge.
+ */
+function reconcileOnSave(document: vscode.TextDocument): void {
+  if (!repoRoot) return;
+  const rel = relPath(document.uri);
+  if (!rel) return;
+  const report = reconcileFile(repoRoot, rel, {
+    apply: true,
+    sourceContent: document.getText(),
+  });
+  if (report.applied > 0) {
+    refreshActiveEditor();
+    sidebar?.refresh();
+  }
+}
+
+const HOOK_PROMPT_KEY = 'gitTasks.hookPromptDismissed';
+
+/**
+ * Reconcile-on-save only covers files edited in this window. Pulls, branch
+ * switches and CLI-driven changes need the git hooks, so offer them once.
+ */
+async function maybePromptInstallHooks(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  if (!repoRoot) return;
+  if (context.workspaceState.get<boolean>(HOOK_PROMPT_KEY)) return;
+  if (hooksInstalled(repoRoot)) return;
+
+  const choice = await vscode.window.showInformationMessage(
+    'git-tasks: install git hooks so tasks re-anchor automatically on pull, checkout and commit?',
+    'Install hooks',
+    'Not now',
+    "Don't ask again",
+  );
+  if (choice === 'Install hooks') {
+    await installHooksCmd();
+  } else if (choice === "Don't ask again") {
+    await context.workspaceState.update(HOOK_PROMPT_KEY, true);
+  }
+}
+
+async function installHooksCmd(): Promise<void> {
+  if (!repoRoot) {
+    vscode.window.showWarningMessage('git-tasks: not inside a Git repository.');
+    return;
+  }
+  const invocation = findGitTasksOnPath();
+  if (!invocation) {
+    const pick = await vscode.window.showWarningMessage(
+      'git-tasks: the `git-tasks` CLI is not on your PATH. Git hooks run in a bare shell and need it to be installed globally.',
+      'Copy install command',
+    );
+    if (pick === 'Copy install command') {
+      await vscode.env.clipboard.writeText('npm install -g @ribarrat/git-tasks');
+      vscode.window.showInformationMessage('git-tasks: install command copied to clipboard.');
+    }
+    return;
+  }
+  try {
+    installHooks(repoRoot, 'git-tasks');
+    vscode.window.showInformationMessage(
+      'git-tasks: installed post-merge, post-checkout and pre-commit hooks.',
+    );
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `git-tasks: could not install hooks — ${(err as Error).message}`,
+    );
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   repoRoot = findWorkspaceRepoRoot();
 
@@ -150,6 +343,7 @@ export function activate(context: vscode.ExtensionContext): void {
         refreshActiveEditor();
       }
     }),
+    vscode.workspace.onDidSaveTextDocument((doc) => reconcileOnSave(doc)),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('git-tasks.showResolved')) {
         refreshActiveEditor();
@@ -164,6 +358,8 @@ export function activate(context: vscode.ExtensionContext): void {
   updateLineHasAnnotationContext();
 
   registerCommands(context);
+
+  void maybePromptInstallHooks(context);
 }
 
 function registerCommands(context: vscode.ExtensionContext): void {
@@ -191,6 +387,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
       if (issues > 0) vscode.window.showWarningMessage(msg);
       else vscode.window.showInformationMessage(msg);
     }),
+    vscode.commands.registerCommand('git-tasks.installHooks', installHooksCmd),
     vscode.commands.registerCommand('git-tasks.filterByStatus', filterByStatusCmd),
     vscode.commands.registerCommand('git-tasks.filterByType', filterByTypeCmd),
     vscode.commands.registerCommand('git-tasks.filterAssignedToMe', filterAssignedToMeCmd),
@@ -251,10 +448,14 @@ async function addAnnotationCmd(): Promise<void> {
   if (!type) return;
 
   const text = await vscode.window.showInputBox({
-    prompt: 'Task text',
-    placeHolder: 'Describe the task / comment / issue',
+    prompt: 'Task title',
+    placeHolder: 'Short summary of the task / comment / issue',
   });
   if (!text) return;
+
+  // Cancelling aborts; an empty string just means "no description".
+  const descriptionInput = await promptDescription('');
+  if (descriptionInput === undefined) return;
 
   const priority = (await vscode.window.showQuickPick(ENTRY_PRIORITIES, {
     placeHolder: 'Priority',
@@ -293,6 +494,7 @@ async function addAnnotationCmd(): Promise<void> {
     endLine: isRange ? endLine : undefined,
     lineContent,
     text,
+    description: descriptionInput || undefined,
     author,
     assignee: assigneeInput.trim() || undefined,
     priority,
@@ -353,16 +555,22 @@ async function editAnnotationCmd(arg?: unknown): Promise<void> {
     return;
   }
   const newText = await vscode.window.showInputBox({
-    prompt: 'New text',
+    prompt: 'Title',
     value: found.entry.text,
   });
   if (newText === undefined) return;
+
+  const newDescription = await promptDescription(found.entry.description ?? '');
+  if (newDescription === undefined) return;
 
   const newStatus = (await vscode.window.showQuickPick(ENTRY_STATUSES, {
     placeHolder: 'Status',
   })) as EntryStatus | undefined;
 
-  const patch: Partial<AnnotationEntry> = { text: newText };
+  const patch: Partial<AnnotationEntry> = {
+    text: newText,
+    description: newDescription || undefined,
+  };
   if (newStatus) patch.status = newStatus;
   updateEntry(repoRoot, id, patch);
   refreshActiveEditor();

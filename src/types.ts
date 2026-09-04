@@ -3,6 +3,19 @@ export type EntryStatus = 'open' | 'in-progress' | 'resolved' | 'closed';
 export type EntryPriority = 'high' | 'medium' | 'low';
 export type EntrySeverity = 'critical' | 'major' | 'minor' | 'trivial';
 
+/**
+ * Where an annotation was originally pinned, captured once when it is created
+ * and never rewritten afterwards. `line`/`lineContent` on the entry itself
+ * track the *current* location and are updated by reconcile as the code moves;
+ * this block is what lets the UI say "line 42, originally line 17".
+ */
+export interface EntryOrigin {
+  line: number;
+  endLine?: number;
+  lineContent: string;
+  commitSHA: string;
+}
+
 export interface AnnotationEntry {
   id: string;
   type: EntryType;
@@ -11,6 +24,7 @@ export interface AnnotationEntry {
   endLine?: number;
   lineContent: string;
   text: string;
+  description?: string;
   author: string;
   assignee?: string;
   createdAt: string;
@@ -19,6 +33,7 @@ export interface AnnotationEntry {
   priority: EntryPriority;
   severity: EntrySeverity;
   tags?: string[];
+  origin?: EntryOrigin;
 }
 
 export interface AnnotationFile {
@@ -27,7 +42,7 @@ export interface AnnotationFile {
   entries: AnnotationEntry[];
 }
 
-export const SCHEMA_VERSION = '1.0';
+export const SCHEMA_VERSION = '1.1';
 
 export const ENTRY_TYPES: EntryType[] = ['task', 'comment', 'issue'];
 export const ENTRY_STATUSES: EntryStatus[] = ['open', 'in-progress', 'resolved', 'closed'];

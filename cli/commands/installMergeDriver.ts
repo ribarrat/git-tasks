@@ -9,6 +9,15 @@ const ATTR_LINE = '.git-tasks/**/*.json merge=git-tasks-json';
 const ATTR_MARK = '# >>> git-tasks (managed)';
 const ATTR_END = '# <<< git-tasks (managed)';
 
+/** The markers contain `(managed)`, so they must be escaped before use in a regex. */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function managedAttrRe(): RegExp {
+  return new RegExp(`${escapeRe(ATTR_MARK)}[\\s\\S]*?${escapeRe(ATTR_END)}\\n?`, 'm');
+}
+
 export function runInstallMergeDriver(): void {
   const repoRoot = ensureRepoRoot();
   const invocation = gitTasksInvocation();
@@ -21,7 +30,7 @@ export function runInstallMergeDriver(): void {
 
   const attrPath = path.join(repoRoot, '.gitattributes');
   let existing = fs.existsSync(attrPath) ? fs.readFileSync(attrPath, 'utf8') : '';
-  const re = new RegExp(`${ATTR_MARK}[\\s\\S]*?${ATTR_END}\\n?`, 'm');
+  const re = managedAttrRe();
   const block = `${ATTR_MARK}\n${ATTR_LINE}\n${ATTR_END}\n`;
   const next = re.test(existing)
     ? existing.replace(re, block)
@@ -44,7 +53,7 @@ export function runUninstallMergeDriver(): void {
   const attrPath = path.join(repoRoot, '.gitattributes');
   if (fs.existsSync(attrPath)) {
     const existing = fs.readFileSync(attrPath, 'utf8');
-    const re = new RegExp(`${ATTR_MARK}[\\s\\S]*?${ATTR_END}\\n?`, 'm');
+    const re = managedAttrRe();
     if (re.test(existing)) {
       const cleaned = existing.replace(re, '');
       if (cleaned.trim().length === 0) fs.unlinkSync(attrPath);

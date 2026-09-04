@@ -8,10 +8,12 @@ import {
   ENTRY_SEVERITIES,
   ENTRY_STATUSES,
 } from '../../src/types';
-import { ensureRepoRoot, red, shortId } from '../util';
+import { ensureRepoRoot, readDescriptionOption, red, shortId } from '../util';
 
 interface UpdateOpts {
   text?: string;
+  description?: string;
+  descriptionFile?: string;
   status?: string;
   priority?: string;
   severity?: string;
@@ -24,6 +26,11 @@ export function runUpdate(id: string, opts: UpdateOpts): void {
   const patch: Partial<AnnotationEntry> = {};
 
   if (opts.text !== undefined) patch.text = opts.text;
+  // An explicit empty --description clears it.
+  if (opts.description !== undefined || opts.descriptionFile !== undefined) {
+    patch.description =
+      readDescriptionOption(opts.description, opts.descriptionFile) || undefined;
+  }
   if (opts.status !== undefined) {
     if (!ENTRY_STATUSES.includes(opts.status as EntryStatus)) {
       console.error(red(`Invalid --status: ${opts.status}.`));

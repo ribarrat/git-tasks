@@ -348,3 +348,210 @@ describe('CLI — purge', () => {
     expect(stdout).toContain('nothing to purge');
   });
 });
+
+describe('CLI — description field', () => {
+  let repo: TempRepo;
+  beforeEach(() => {
+    repo = makeTempRepo();
+    repo.writeFile(SAMPLE_PATH, SAMPLE_CONTENT);
+    repo.commitAll('seed sample');
+  });
+  afterEach(() => repo.cleanup());
+
+  it('add --description persists alongside the title', () => {
+    runCli(repo.root, [
+      'add', SAMPLE_PATH, '2',
+      '--type', 'task',
+      '--text', 'Short title',
+      '--description', 'The longer why behind it.',
+    ]);
+    const [entry] = repo.readAnnotationFile(SAMPLE_PATH).entries;
+    expect(entry.text).toBe('Short title');
+    expect(entry.description).toBe('The longer why behind it.');
+  });
+
+  it('omitting --description leaves the field unset', () => {
+    runCli(repo.root, [
+      'add', SAMPLE_PATH, '2', '--type', 'task', '--text', 'No description',
+    ]);
+    const [entry] = repo.readAnnotationFile(SAMPLE_PATH).entries;
+    expect(entry.description).toBeUndefined();
+  });
+
+  it('update --description sets and clears it', () => {
+    const e = seed(repo);
+    runCli(repo.root, ['update', e.id, '--description', 'added later']);
+    expect(repo.readAnnotationFile(SAMPLE_PATH).entries[0].description).toBe('added later');
+
+    runCli(repo.root, ['update', e.id, '--description', '']);
+    expect(repo.readAnnotationFile(SAMPLE_PATH).entries[0].description).toBeUndefined();
+  });
+
+  it('show prints the description and the origin line', () => {
+    runCli(repo.root, [
+      'add', SAMPLE_PATH, '2',
+      '--type', 'task',
+      '--text', 'Title here',
+      '--description', 'Body text here',
+    ]);
+    const [entry] = repo.readAnnotationFile(SAMPLE_PATH).entries;
+    const { stdout } = runCli(repo.root, ['show', entry.id]);
+    expect(stdout).toContain('Title here');
+    expect(stdout).toContain('Body text here');
+    expect(stdout).toContain('origin:');
+  });
+
+  it('list --json exposes description and origin', () => {
+    runCli(repo.root, [
+      'add', SAMPLE_PATH, '2',
+      '--type', 'task', '--text', 't', '--description', 'd',
+    ]);
+    const rows = JSON.parse(runCli(repo.root, ['list', '--json']).stdout);
+    expect(rows[0].description).toBe('d');
+    expect(rows[0].origin.line).toBe(2);
+  });
+});
+
+describe('CLI — merge driver', () => {
+  let repo: TempRepo;
+  beforeEach(() => {
+    repo = makeTempRepo();
+    repo.writeFile(SAMPLE_PATH, SAMPLE_CONTENT);
+    repo.commitAll('seed sample');
+  });
+  afterEach(() => repo.cleanup());
+
+  const writeJson = (p: string, value: unknown): string => {
+    const abs = path.join(repo.root, p);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, JSON.stringify(value, null, 2) + '\n', 'utf8');
+    return abs;
+  };
+
+  it('relocates merged entries against the worktree source', () => {
+    const entry = createEntry({
+      type: 'task',
+      commitSHA: repo.git('rev-parse', 'HEAD'),
+      line: 2,
+      lineContent: '  return `hello, ${name}`;',
+      text: 'Sample task',
+      author: 'Test User',
+    });
+    const file = { version: '1.1', file: SAMPLE_PATH, entries: [entry] };
+    const ancestor = writeJson('tmp/base.json', file);
+    const ours = writeJson('tmp/ours.json', file);
+    const theirs = writeJson('tmp/theirs.json', file);
+
+    // The merge brought in two extra lines at the top of the source file.
+    repo.writeFile(SAMPLE_PATH, ['// added', '// added 2', SAMPLE_CONTENT].join('\n'));
+
+    const { status } = runCli(repo.root, [
+      'merge-driver', ancestor, ours, theirs, `.git-tasks/${SAMPLE_PATH}.json`,
+    ]);
+    expect(status).toBe(0);
+
+    const merged = JSON.parse(fs.readFileSync(ours, 'utf8'));
+    expect(merged.entries[0].line).toBe(4);
+    expect(merged.entries[0].origin.line).toBe(2);
+  });
+
+  it('leaves pins alone when the source still has conflict markers', () => {
+    const entry = createEntry({
+      type: 'task',
+      commitSHA: repo.git('rev-parse', 'HEAD'),
+      line: 2,
+      lineContent: '  return `hello, ${name}`;',
+      text: 'Sample task',
+      author: 'Test User',
+    });
+    const file = { version: '1.1', file: SAMPLE_PATH, entries: [entry] };
+    const ancestor = writeJson('tmp/base.json', file);
+    const ours = writeJson('tmp/ours.json', file);
+    const theirs = writeJson('tmp/theirs.json', file);
+
+    repo.writeFile(
+      SAMPLE_PATH,
+      ['<<<<<<< HEAD', '// mine', '=======', '// theirs', '>>>>>>> branch', SAMPLE_CONTENT].join('\n'),
+    );
+
+    const { status } = runCli(repo.root, [
+      'merge-driver', ancestor, ours, theirs, `.git-tasks/${SAMPLE_PATH}.json`,
+    ]);
+    expect(status).toBe(0);
+    const merged = JSON.parse(fs.readFileSync(ours, 'utf8'));
+    expect(merged.entries[0].line).toBe(2);
+  });
+});
+
+describe('CLI — multi-line descriptions', () => {
+  let repo: TempRepo;
+  beforeEach(() => {
+    repo = makeTempRepo();
+    repo.writeFile(SAMPLE_PATH, SAMPLE_CONTENT);
+    repo.commitAll('seed sample');
+  });
+  afterEach(() => repo.cleanup());
+
+  const BODY = [
+    'First paragraph.',
+    '',
+    '- bullet one',
+    '- bullet two',
+    '',
+    'See [docs](https://example.com/d).',
+  ].join('\n');
+
+  it('preserves newlines, lists and links passed via --description', () => {
+    runCli(repo.root, [
+      'add', SAMPLE_PATH, '2', '--type', 'task', '--text', 'T', '--description', BODY,
+    ]);
+    expect(repo.readAnnotationFile(SAMPLE_PATH).entries[0].description).toBe(BODY);
+  });
+
+  it('reads the description from a file with --description-file', () => {
+    const p = path.join(repo.root, 'body.md');
+    fs.writeFileSync(p, BODY + '\n', 'utf8');
+    runCli(repo.root, [
+      'add', SAMPLE_PATH, '2', '--type', 'task', '--text', 'T', '--description-file', p,
+    ]);
+    expect(repo.readAnnotationFile(SAMPLE_PATH).entries[0].description).toBe(BODY);
+  });
+
+  it('rejects --description and --description-file together', () => {
+    const p = path.join(repo.root, 'body.md');
+    fs.writeFileSync(p, BODY, 'utf8');
+    const { status, stderr } = runCliAllowFail(repo.root, [
+      'add', SAMPLE_PATH, '2', '--type', 'task', '--text', 'T',
+      '--description', 'x', '--description-file', p,
+    ]);
+    expect(status).toBe(1);
+    expect(stderr).toContain('not both');
+  });
+
+  it('errors clearly when the description file is missing', () => {
+    const { status, stderr } = runCliAllowFail(repo.root, [
+      'add', SAMPLE_PATH, '2', '--type', 'task', '--text', 'T',
+      '--description-file', path.join(repo.root, 'nope.md'),
+    ]);
+    expect(status).toBe(1);
+    expect(stderr).toContain('Cannot read description file');
+  });
+
+  it('update --description-file replaces a multi-line body', () => {
+    const e = seed(repo);
+    const p = path.join(repo.root, 'body.md');
+    fs.writeFileSync(p, BODY, 'utf8');
+    runCli(repo.root, ['update', e.id, '--description-file', p]);
+    expect(repo.readAnnotationFile(SAMPLE_PATH).entries[0].description).toBe(BODY);
+  });
+
+  it('round-trips a multi-line body through show', () => {
+    runCli(repo.root, [
+      'add', SAMPLE_PATH, '2', '--type', 'task', '--text', 'T', '--description', BODY,
+    ]);
+    const [entry] = repo.readAnnotationFile(SAMPLE_PATH).entries;
+    const { stdout } = runCli(repo.root, ['show', entry.id]);
+    expect(stdout).toContain('- bullet one');
+    expect(stdout).toContain('[docs](https://example.com/d)');
+  });
+});

@@ -16,11 +16,13 @@ import {
   mergeEntry,
   reconcileAll,
   reconcileEntry,
+  reconcileFile,
+  relocateEntry,
   removeEntry,
   softMatchSnapshot,
   updateEntry,
 } from '../src/taskManager';
-import { AnnotationEntry, AnnotationFile } from '../src/types';
+import { AnnotationEntry, AnnotationFile, SCHEMA_VERSION } from '../src/types';
 import { TempRepo, makeTempRepo } from './helpers';
 
 const SAMPLE_FILE = 'src/sample.ts';
@@ -228,7 +230,7 @@ describe('taskManager — on-disk operations', () => {
     const entry = seedEntry();
     addEntry(repo.root, SAMPLE_FILE, entry);
     const loaded = loadAnnotationFile(repo.root, SAMPLE_FILE);
-    expect(loaded?.version).toBe('1.0');
+    expect(loaded?.version).toBe(SCHEMA_VERSION);
     expect(loaded?.file).toBe(SAMPLE_FILE);
     expect(loaded?.entries).toHaveLength(1);
     expect(loaded?.entries[0].id).toBe(entry.id);
@@ -532,5 +534,152 @@ describe('taskManager — three-way merge', () => {
     const result = mergeAnnotationFiles(ancestor, ours, theirs);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.merged.entries).toHaveLength(0);
+  });
+});
+
+
+describe('origin tracking (schema 1.1)', () => {
+  let repo: TempRepo;
+
+  beforeEach(() => {
+    repo = makeTempRepo();
+    repo.writeFile(SAMPLE_FILE, SAMPLE_CONTENT + '\n');
+  });
+
+  afterEach(() => repo.cleanup());
+
+  it('createEntry stamps origin from the initial pin', () => {
+    const e = seedEntry({ line: 2, endLine: 3, lineContent: 'a\nb' });
+    expect(e.origin).toEqual({
+      line: 2,
+      endLine: 3,
+      lineContent: 'a\nb',
+      commitSHA: '0'.repeat(40),
+    });
+  });
+
+  it('keeps the original line and text after the entry drifts and relocates', () => {
+    const entry = seedEntry();
+    addEntry(repo.root, SAMPLE_FILE, entry);
+
+    // Two new lines above push the annotated line from 2 down to 4.
+    repo.writeFile(SAMPLE_FILE, ['// header', '// header 2', SAMPLE_CONTENT].join('\n') + '\n');
+    const report = reconcileAll(repo.root, { apply: true });
+    expect(report.applied).toBe(1);
+
+    const [moved] = repo.readAnnotationFile(SAMPLE_FILE).entries;
+    expect(moved.line).toBe(4);
+    expect(moved.origin).toEqual({
+      line: 2,
+      lineContent: '  return `hello, ${name}`;',
+      commitSHA: '0'.repeat(40),
+    });
+  });
+
+  it('freezes origin only once, so a second move still reports the first position', () => {
+    const entry = seedEntry();
+    addEntry(repo.root, SAMPLE_FILE, entry);
+
+    repo.writeFile(SAMPLE_FILE, ['// one', SAMPLE_CONTENT].join('\n') + '\n');
+    reconcileAll(repo.root, { apply: true });
+    repo.writeFile(SAMPLE_FILE, ['// one', '// two', '// three', SAMPLE_CONTENT].join('\n') + '\n');
+    reconcileAll(repo.root, { apply: true });
+
+    const [moved] = repo.readAnnotationFile(SAMPLE_FILE).entries;
+    expect(moved.line).toBe(5);
+    expect(moved.origin?.line).toBe(2);
+  });
+
+  it('backfills origin for a pre-1.1 entry the first time it moves', () => {
+    const entry = seedEntry();
+    delete entry.origin;
+    addEntry(repo.root, SAMPLE_FILE, entry);
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].origin).toBeUndefined();
+
+    repo.writeFile(SAMPLE_FILE, ['// header', SAMPLE_CONTENT].join('\n') + '\n');
+    reconcileAll(repo.root, { apply: true });
+
+    const [moved] = repo.readAnnotationFile(SAMPLE_FILE).entries;
+    expect(moved.line).toBe(3);
+    expect(moved.origin?.line).toBe(2);
+  });
+
+  it('updateEntry cannot overwrite a frozen origin', () => {
+    const entry = seedEntry();
+    addEntry(repo.root, SAMPLE_FILE, entry);
+    updateEntry(repo.root, entry.id, {
+      text: 'changed',
+      origin: { line: 999, lineContent: 'nope', commitSHA: 'x' },
+    } as Partial<AnnotationEntry>);
+    const [e] = repo.readAnnotationFile(SAMPLE_FILE).entries;
+    expect(e.text).toBe('changed');
+    expect(e.origin?.line).toBe(2);
+  });
+
+  it('relocateEntry re-snapshots content when the match is fuzzy', () => {
+    const entry = seedEntry();
+    const content = ['// header', 'function greet(name: string) {', '  return `hi, ${name}`;', '}'].join('\n');
+    const moved = relocateEntry(content, entry, {
+      entryId: entry.id,
+      status: 'soft-match',
+      newLine: 3,
+      newEndLine: 3,
+    });
+    expect(moved).toBe(true);
+    expect(entry.line).toBe(3);
+    expect(entry.lineContent).toBe('  return `hi, ${name}`;');
+    expect(entry.origin?.lineContent).toBe('  return `hello, ${name}`;');
+  });
+
+  it('mergeEntry keeps origin when only one side has been backfilled', () => {
+    const ours = seedEntry();
+    const theirs: AnnotationEntry = { ...ours };
+    delete theirs.origin;
+    const merged = mergeEntry(undefined, theirs, ours);
+    expect(merged.origin?.line).toBe(2);
+  });
+});
+
+describe('reconcileFile', () => {
+  let repo: TempRepo;
+
+  beforeEach(() => {
+    repo = makeTempRepo();
+    repo.writeFile(SAMPLE_FILE, SAMPLE_CONTENT + '\n');
+  });
+
+  afterEach(() => repo.cleanup());
+
+  it('relocates entries for a single file only', () => {
+    const other = 'src/other.ts';
+    repo.writeFile(other, SAMPLE_CONTENT + '\n');
+    addEntry(repo.root, SAMPLE_FILE, seedEntry());
+    addEntry(repo.root, other, seedEntry());
+
+    const shifted = ['// header', SAMPLE_CONTENT].join('\n') + '\n';
+    repo.writeFile(SAMPLE_FILE, shifted);
+    repo.writeFile(other, shifted);
+
+    const report = reconcileFile(repo.root, SAMPLE_FILE, { apply: true });
+    expect(report.applied).toBe(1);
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].line).toBe(3);
+    // The sibling file was left untouched — it still points at the old line.
+    expect(repo.readAnnotationFile(other).entries[0].line).toBe(2);
+  });
+
+  it('accepts in-memory content, for unsaved editor buffers', () => {
+    addEntry(repo.root, SAMPLE_FILE, seedEntry());
+    const report = reconcileFile(repo.root, SAMPLE_FILE, {
+      apply: true,
+      sourceContent: ['// a', '// b', SAMPLE_CONTENT].join('\n') + '\n',
+    });
+    expect(report.applied).toBe(1);
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].line).toBe(4);
+  });
+
+  it('is a no-op for a file with no annotations', () => {
+    const report = reconcileFile(repo.root, 'src/missing.ts', { apply: true });
+    expect(report.total).toBe(0);
+    expect(report.applied).toBe(0);
   });
 });

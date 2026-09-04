@@ -20,6 +20,7 @@ import {
 import {
   ensureRepoRoot,
   parseLineArg,
+  readDescriptionOption,
   red,
   relPathFromRepoArg,
   shortId,
@@ -28,6 +29,8 @@ import {
 interface AddOpts {
   type: string;
   text: string;
+  description?: string;
+  descriptionFile?: string;
   priority?: string;
   severity?: string;
   assignee?: string;
@@ -83,6 +86,7 @@ export function runAdd(file: string, lineArg: string, opts: AddOpts): void {
     endLine,
     lineContent,
     text: opts.text,
+    description: readDescriptionOption(opts.description, opts.descriptionFile) || undefined,
     author: getUserName(repoRoot),
     assignee: opts.assignee,
     priority,
