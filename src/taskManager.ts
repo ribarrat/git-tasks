@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AnnotationEntry,
   AnnotationFile,
+  EntryOrigin,
   EntryPriority,
   EntrySeverity,
   EntryStatus,
@@ -49,7 +50,10 @@ export function loadAnnotationFile(
 export function saveAnnotationFile(repoRoot: string, file: AnnotationFile): void {
   const p = annotationFilePathFor(repoRoot, file.file);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(file, null, 2) + '\n', 'utf8');
+  // Any write goes out at the current schema version — entries may have picked
+  // up an `origin` block since the file was last read.
+  const out: AnnotationFile = { ...file, version: SCHEMA_VERSION };
+  fs.writeFileSync(p, JSON.stringify(out, null, 2) + '\n', 'utf8');
 }
 
 export function deleteAnnotationFileIfEmpty(repoRoot: string, relFilePath: string): void {
@@ -105,6 +109,7 @@ export interface CreateEntryInput {
   endLine?: number;
   lineContent: string;
   text: string;
+  description?: string;
   author: string;
   assignee?: string;
   status?: EntryStatus;
@@ -132,9 +137,33 @@ export function createEntry(input: CreateEntryInput): AnnotationEntry {
   if (input.endLine !== undefined && input.endLine !== input.line) {
     entry.endLine = input.endLine;
   }
+  if (input.description) entry.description = input.description;
   if (input.assignee) entry.assignee = input.assignee;
   if (input.tags && input.tags.length > 0) entry.tags = input.tags;
+  entry.origin = originFrom(entry);
   return entry;
+}
+
+/**
+ * Snapshot an entry's current pin as an immutable origin record.
+ */
+function originFrom(entry: AnnotationEntry): EntryOrigin {
+  const origin: EntryOrigin = {
+    line: entry.line,
+    lineContent: entry.lineContent,
+    commitSHA: entry.commitSHA,
+  };
+  if (entry.endLine !== undefined) origin.endLine = entry.endLine;
+  return origin;
+}
+
+/**
+ * Entries created before schema 1.1 have no `origin`. The first time such an
+ * entry is about to move, freeze where it currently sits as its origin — that
+ * is the oldest position we can still prove, so it is the honest answer.
+ */
+export function ensureOrigin(entry: AnnotationEntry): void {
+  if (!entry.origin) entry.origin = originFrom(entry);
 }
 
 export function addEntry(
@@ -185,6 +214,7 @@ export function updateEntry(
     ...patch,
     id: af.entries[idx].id,
     createdAt: af.entries[idx].createdAt,
+    origin: af.entries[idx].origin,
     updatedAt: new Date().toISOString(),
   };
   af.entries[idx] = updated;
@@ -389,15 +419,73 @@ export function reconcileEntry(
 }
 
 /**
- * Walk all annotation files; reconcile every entry. When `apply` is true,
- * `'moved'` results are written back to disk (line numbers updated,
- * `updatedAt` bumped). Other statuses are reported but not auto-applied.
+ * Apply a relocation to an entry in place: freeze its origin (first move only),
+ * repoint line/endLine, and re-snapshot the content now under those lines.
+ * Returns false when the result carries no new position.
  */
-export function reconcileAll(
-  repoRoot: string,
+export function relocateEntry(
+  fileContent: string,
+  entry: AnnotationEntry,
+  result: ReconcileResult,
+): boolean {
+  if (result.newLine === undefined) return false;
+  const newEndLine = result.newEndLine ?? result.newLine;
+  if (entry.line === result.newLine && (entry.endLine ?? entry.line) === newEndLine) {
+    return false;
+  }
+  ensureOrigin(entry);
+  entry.line = result.newLine;
+  if (newEndLine !== result.newLine) entry.endLine = newEndLine;
+  else delete entry.endLine;
+  // Re-snapshot: for an exact match this is a no-op, but a soft match lands on
+  // text that has genuinely changed and the pin must follow it.
+  entry.lineContent = extractLineContent(fileContent, entry.line, entry.endLine);
+  entry.updatedAt = new Date().toISOString();
+  return true;
+}
+
+/**
+ * Reconcile every entry in one already-loaded annotation file against its
+ * source. Mutates `af` when `apply` is set; the caller persists it.
+ */
+function reconcileLoadedFile(
+  af: AnnotationFile,
+  sourceContent: string | undefined,
   opts: { apply: boolean },
-): ReconcileReport {
-  const report: ReconcileReport = {
+  report: ReconcileReport,
+): boolean {
+  let mutated = false;
+  for (const entry of af.entries) {
+    report.total++;
+    const result = reconcileEntry(sourceContent, entry);
+    const item: ReconcileItem = { file: af.file, entry, result };
+    switch (result.status) {
+      case 'ok':
+        report.ok++;
+        break;
+      case 'moved':
+        report.moved.push(item);
+        if (opts.apply && relocateEntry(sourceContent!, entry, result)) {
+          mutated = true;
+          report.applied++;
+        }
+        break;
+      case 'soft-match':
+        report.softMatch.push(item);
+        break;
+      case 'stale':
+        report.stale.push(item);
+        break;
+      case 'orphan':
+        report.orphan.push(item);
+        break;
+    }
+  }
+  return mutated;
+}
+
+function emptyReport(): ReconcileReport {
+  return {
     total: 0,
     ok: 0,
     applied: 0,
@@ -406,44 +494,47 @@ export function reconcileAll(
     stale: [],
     orphan: [],
   };
+}
 
+function readSource(repoRoot: string, relFilePath: string): string | undefined {
+  const abs = path.join(repoRoot, relFilePath);
+  return fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : undefined;
+}
+
+/**
+ * Reconcile the annotations for a single source file. Used by the editor to
+ * settle drift the moment a file is saved, without walking the whole repo.
+ */
+export function reconcileFile(
+  repoRoot: string,
+  relFilePath: string,
+  opts: { apply: boolean; sourceContent?: string },
+): ReconcileReport {
+  const report = emptyReport();
+  const af = loadAnnotationFile(repoRoot, relFilePath);
+  if (!af || af.entries.length === 0) return report;
+  const sourceContent = opts.sourceContent ?? readSource(repoRoot, af.file);
+  const mutated = reconcileLoadedFile(af, sourceContent, opts, report);
+  if (mutated) saveAnnotationFile(repoRoot, af);
+  return report;
+}
+
+/**
+ * Walk all annotation files; reconcile every entry. When `apply` is true,
+ * `'moved'` results are written back to disk (line numbers updated, origin
+ * frozen, `updatedAt` bumped). Other statuses are reported but not
+ * auto-applied.
+ */
+export function reconcileAll(
+  repoRoot: string,
+  opts: { apply: boolean },
+): ReconcileReport {
+  const report = emptyReport();
   for (const af of listAllAnnotationFiles(repoRoot)) {
-    const sourceAbs = path.join(repoRoot, af.file);
-    const sourceContent = fs.existsSync(sourceAbs)
-      ? fs.readFileSync(sourceAbs, 'utf8')
-      : undefined;
-    let mutated = false;
-
-    for (const entry of af.entries) {
-      report.total++;
-      const result = reconcileEntry(sourceContent, entry);
-      const item: ReconcileItem = { file: af.file, entry, result };
-      switch (result.status) {
-        case 'ok':
-          report.ok++;
-          break;
-        case 'moved':
-          report.moved.push(item);
-          if (opts.apply) {
-            entry.line = result.newLine!;
-            if (entry.endLine !== undefined) entry.endLine = result.newEndLine!;
-            entry.updatedAt = new Date().toISOString();
-            mutated = true;
-            report.applied++;
-          }
-          break;
-        case 'soft-match':
-          report.softMatch.push(item);
-          break;
-        case 'stale':
-          report.stale.push(item);
-          break;
-        case 'orphan':
-          report.orphan.push(item);
-          break;
-      }
+    const sourceContent = readSource(repoRoot, af.file);
+    if (reconcileLoadedFile(af, sourceContent, opts, report)) {
+      saveAnnotationFile(repoRoot, af);
     }
-    if (mutated) saveAnnotationFile(repoRoot, af);
   }
   return report;
 }
@@ -451,7 +542,7 @@ export function reconcileAll(
 // ---------- JSON merge driver ----------
 
 type EntryField = keyof AnnotationEntry;
-const IMMUTABLE_FIELDS: EntryField[] = ['id', 'createdAt', 'commitSHA', 'author'];
+const IMMUTABLE_FIELDS: EntryField[] = ['id', 'createdAt', 'commitSHA', 'author', 'origin'];
 
 function fieldEqual(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -477,6 +568,12 @@ export function mergeEntry(
   for (const f of IMMUTABLE_FIELDS) {
     (out as any)[f] = ours[f];
   }
+  // `origin` is frozen at creation, so both sides agree whenever both have it.
+  // The one case that matters is a pre-1.1 entry that was backfilled on only
+  // one side — prefer the ancestor's record, then whichever side has one.
+  const origin = ancestor?.origin ?? ours.origin ?? theirs.origin;
+  if (origin) out.origin = origin;
+  else delete out.origin;
   const allKeys = new Set<EntryField>([
     ...(Object.keys(ours) as EntryField[]),
     ...(Object.keys(theirs) as EntryField[]),

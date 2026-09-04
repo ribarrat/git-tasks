@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { AnnotationEntry, EntryPriority, EntrySeverity, EntryStatus } from './types';
 import { isDrifted, loadAnnotationFile } from './taskManager';
 import { isCurrentUser } from './gitHelper';
+import { escapeHtml, preserveLineBreaks } from './description';
 
 const COLOR_BLUE = '#2f80ed';
 const COLOR_GREEN = '#3fb950';
@@ -51,18 +52,45 @@ function colored(value: string, color: string): string {
   return `<span style="color:${color};">\`${value}\`</span>`;
 }
 
+/**
+ * Commands the hover is allowed to invoke. Annotation files travel through
+ * `git pull`, so their text is written by other people — scoping `isTrusted`
+ * to this list means an injected `command:` link in a task body is inert while
+ * our own action links keep working.
+ */
+const ENABLED_COMMANDS = [
+  'git-tasks.editAnnotation',
+  'git-tasks.resolveAnnotation',
+  'git-tasks.reopenAnnotation',
+  'git-tasks.deleteAnnotation',
+];
+
 function formatRange(e: AnnotationEntry): string {
   return e.endLine && e.endLine !== e.line
     ? `Lines ${e.line}–${e.endLine}`
     : `Line ${e.line}`;
 }
 
+/**
+ * A task that has been relocated shows where it started out, so the pin's
+ * history stays visible even though the live line number has moved on.
+ */
+function formatOrigin(e: AnnotationEntry): string {
+  const o = e.origin;
+  if (!o) return '';
+  if (o.line === e.line && (o.endLine ?? o.line) === (e.endLine ?? e.line)) return '';
+  const range =
+    o.endLine && o.endLine !== o.line ? `${o.line}–${o.endLine}` : `${o.line}`;
+  return ` · originally ${range}`;
+}
+
 function entryToMarkdown(repoRoot: string, e: AnnotationEntry, drifted: boolean): string {
   const mine = isCurrentUser(repoRoot, e.assignee);
-  const assigneeStr = e.assignee
+  const assignee = e.assignee ? escapeHtml(e.assignee) : undefined;
+  const assigneeStr = assignee
     ? mine
-      ? `**${e.assignee}** _(you)_`
-      : e.assignee
+      ? `**${assignee}** _(you)_`
+      : assignee
     : '_unassigned_';
 
   const typeLabel = e.type.toUpperCase();
@@ -71,7 +99,13 @@ function entryToMarkdown(repoRoot: string, e: AnnotationEntry, drifted: boolean)
     ` · severity ${colored(e.severity, severityColor(e.severity))}` +
     ` · status ${colored(e.status, statusColor(e.status))}`;
   const dateStr = new Date(e.createdAt).toLocaleString();
-  const tagsStr = e.tags && e.tags.length > 0 ? `\n\nTags: ${e.tags.map((t) => `\`${t}\``).join(' ')}` : '';
+  const descriptionStr = e.description
+    ? `\n\n${preserveLineBreaks(escapeHtml(e.description))}`
+    : '';
+  const tagsStr =
+    e.tags && e.tags.length > 0
+      ? `\n\nTags: ${e.tags.map((t) => `\`${escapeHtml(t)}\``).join(' ')}`
+      : '';
   const driftStr = drifted
     ? `\n\n> ⚠ The file content has changed since this annotation was written — lines may have moved.`
     : '';
@@ -87,9 +121,10 @@ function entryToMarkdown(repoRoot: string, e: AnnotationEntry, drifted: boolean)
 
   return [
     header,
-    `${formatRange(e)} · by ${e.author} · assigned to ${assigneeStr} · ${dateStr}`,
+    `${formatRange(e)}${formatOrigin(e)} · by ${escapeHtml(e.author)} · assigned to ${assigneeStr} · ${dateStr}`,
     '',
-    e.text,
+    `**${escapeHtml(e.text)}**`,
+    descriptionStr,
     tagsStr,
     driftStr,
     actions,
@@ -128,7 +163,7 @@ export class AnnotationHoverProvider implements vscode.HoverProvider {
     if (matches.length === 0) return undefined;
 
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
+    md.isTrusted = { enabledCommands: ENABLED_COMMANDS };
     md.supportHtml = true;
     for (let i = 0; i < matches.length; i++) {
       const drifted = isDrifted(content, matches[i]);

@@ -97,6 +97,10 @@
         "icon": "$(sync)"
       },
       {
+        "command": "git-tasks.installHooks",
+        "title": "Git Tasks: Install Git Hooks"
+      },
+      {
         "command": "git-tasks.filterByStatus",
         "title": "Git Tasks: Filter by Status",
         "icon": "$(filter)"

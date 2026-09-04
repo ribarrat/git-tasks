@@ -25,10 +25,26 @@ export function runShow(id: string): void {
   console.log(`created: ${e.createdAt}`);
   console.log(`updated: ${e.updatedAt}`);
   console.log(`commit:  ${e.commitSHA}`);
+  if (e.origin) {
+    const o = e.origin;
+    const originRange =
+      o.endLine && o.endLine !== o.line ? `${o.line}-${o.endLine}` : `${o.line}`;
+    const movedNote = originRange === range ? dim(' (never moved)') : '';
+    console.log(`origin:  ${found.file}:${originRange} @ ${o.commitSHA}${movedNote}`);
+  }
   if (e.tags && e.tags.length > 0) console.log(`tags:    ${e.tags.join(', ')}`);
   console.log();
-  console.log(e.text);
+  console.log(bold(e.text));
+  if (e.description) {
+    console.log();
+    console.log(e.description);
+  }
   console.log();
   console.log(dim('--- line content snapshot ---'));
   console.log(e.lineContent);
+  if (e.origin && e.origin.lineContent !== e.lineContent) {
+    console.log();
+    console.log(dim('--- original snapshot ---'));
+    console.log(e.origin.lineContent);
+  }
 }

@@ -67,3 +67,31 @@ export function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n - 1) + '…';
 }
+
+/**
+ * Resolve a description from `--description` / `--description-file`.
+ * `--description-file -` reads stdin, which is the practical way to pass
+ * multi-line text from a script or a heredoc.
+ */
+export function readDescriptionOption(
+  description: string | undefined,
+  descriptionFile: string | undefined,
+): string | undefined {
+  if (description !== undefined && descriptionFile !== undefined) {
+    console.error(red('Use either --description or --description-file, not both.'));
+    process.exit(1);
+  }
+  if (descriptionFile !== undefined) {
+    try {
+      const raw =
+        descriptionFile === '-'
+          ? fs.readFileSync(0, 'utf8')
+          : fs.readFileSync(descriptionFile, 'utf8');
+      return raw.trim();
+    } catch (err) {
+      console.error(red(`Cannot read description file: ${(err as Error).message}`));
+      process.exit(1);
+    }
+  }
+  return description?.trim();
+}

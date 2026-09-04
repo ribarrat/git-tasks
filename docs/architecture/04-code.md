@@ -23,6 +23,7 @@ classDiagram
         +number? endLine
         +string lineContent
         +string text
+        +string? description
         +string author
         +string? assignee
         +string createdAt
@@ -31,6 +32,13 @@ classDiagram
         +EntryPriority priority
         +EntrySeverity severity
         +string[]? tags
+        +EntryOrigin? origin
+    }
+    class EntryOrigin {
+        +number line
+        +number? endLine
+        +string lineContent
+        +string commitSHA
     }
     class EntryType { <<enum>>
         task
@@ -56,6 +64,7 @@ classDiagram
     }
 
     AnnotationFile "1" o-- "*" AnnotationEntry
+    AnnotationEntry "1" *-- "0..1" EntryOrigin
     AnnotationEntry --> EntryType
     AnnotationEntry --> EntryStatus
     AnnotationEntry --> EntryPriority
@@ -64,10 +73,13 @@ classDiagram
 
 ### Invariants
 - `id` is a UUID v4 generated at `createEntry` time and never changes.
-- `commitSHA` and `lineContent` are written once on creation; they're the anchor used by drift detection and are not updated when reconcile moves an entry.
+- `commitSHA` is written once on creation and never changes.
+- `line` / `endLine` / `lineContent` describe the entry's **current** position. Reconcile rewrites all three when it relocates an entry (`relocateEntry`), re-snapshotting the content now under those lines so an exact-match relocation stays exact.
+- `origin` describes the entry's **first** position and is write-once: stamped by `createEntry`, preserved verbatim by `updateEntry`, and treated as immutable by `mergeEntry`. Pre-1.1 entries have none; `ensureOrigin` backfills from the current pin on the first relocation, so the value is always a position the entry genuinely held.
 - `line` ≤ `endLine`. `endLine` is omitted when the annotation covers a single line.
+- `text` is a one-line title; `description` is optional long-form context. Neither is interpreted by the engine.
 - `createdAt` and `updatedAt` are ISO-8601 UTC strings. `updatedAt` advances on every mutation — three-way merge relies on it.
-- `SCHEMA_VERSION` is `'1.0'`. Any breaking change here is a coordinated migration across engine, CLI, extension, and merge driver.
+- `SCHEMA_VERSION` is `'1.1'`. It is written on every save, so a 1.0 file is upgraded in place the first time it is touched. Reads are version-tolerant: every 1.1 addition is optional, so 1.0 files load unchanged. Any *breaking* change here is a coordinated migration across engine, CLI, extension, and merge driver.
 
 ## 2. Reconcile flow
 
@@ -117,8 +129,22 @@ flowchart TD
 - **Exact match before soft match** keeps confident moves silent and surfaces ambiguity only when needed.
 - **Soft match is read-only** by design: a 70 % LCS hit could be the same code with a refactor, *or* an accidentally similar block elsewhere. Auto-relocating it would silently corrupt the pin.
 - **`commitSHA` is the escape hatch.** Even if reconcile gives up (`stale` / `orphan`), the consumer can always `git show <commitSHA>:<file>` to recover the original context.
+- **Relocation is not loss.** `relocateEntry` freezes `origin` before it repoints the entry, so a move records history rather than overwriting it. That is what makes it safe to relocate aggressively and often.
 
-Implementation: [`reconcileEntry`](../../src/taskManager.ts#L348), [`reconcileAll`](../../src/taskManager.ts#L396), [`findSnapshotIn`](../../src/taskManager.ts#L270), [`softMatchSnapshot`](../../src/taskManager.ts#L317).
+### Where reconcile is triggered from
+
+Detection is cheap; the design decision is *when* to apply it. Four triggers cover the ways an entry's line number goes stale, and all of them apply only the `moved` outcome:
+
+| Trigger | Entry point | Scope |
+|---|---|---|
+| File saved in VS Code | `reconcileOnSave` → `reconcileFile` | the saved file only, from the editor buffer |
+| `pre-commit` | `reconcile --auto` → `reconcileAll` | whole repo; re-stages `.git-tasks/` |
+| `post-merge` / `post-checkout` | `reconcile --auto` → `reconcileAll` | whole repo |
+| Merge driver | `relocateAgainstWorktree` → `relocateEntry` | the one file being merged |
+
+`reconcileFile` exists so the editor does not walk the whole repo on every keystroke-to-save; it shares `reconcileLoadedFile` with `reconcileAll`, so both paths make identical decisions. The merge driver deliberately skips a source file that still carries conflict markers — line numbers computed against a conflicted file are meaningless, and `post-merge` will retry once the conflict is resolved.
+
+Implementation: [`reconcileEntry`](../../src/taskManager.ts), [`reconcileFile`](../../src/taskManager.ts), [`reconcileAll`](../../src/taskManager.ts), [`relocateEntry`](../../src/taskManager.ts), [`findSnapshotIn`](../../src/taskManager.ts), [`softMatchSnapshot`](../../src/taskManager.ts).
 
 ## 3. Three-way merge flow
 
@@ -170,6 +196,7 @@ Implementation: [`mergeAnnotationFiles`](../../src/taskManager.ts#L533), [`merge
 | If you're changing... | Touch | Don't forget |
 |---|---|---|
 | The schema | `src/types.ts` | Bump `SCHEMA_VERSION`; update CLI `--json` consumers, the merge driver, the README schema block, and this doc. |
+| When reconcile runs | `src/extension.ts` (on save), `src/hooks.ts` (git hooks), `cli/commands/mergeDriver.ts` (merge) | All four paths funnel into `relocateEntry`; keep the relocation rule in one place rather than per-trigger. |
 | Drift / soft-match logic | `findSnapshotIn`, `softMatchSnapshot`, threshold constant | `test/taskManager.test.ts` covers these as pure functions — extend the cases. |
 | A new entry status / type / priority | `src/types.ts` unions + `ENTRY_*` arrays | Hover colors (`src/hoverProvider.ts`), sidebar `contextValue` (`src/sidebarProvider.ts`), CLI flag validation. |
 | Reconcile rules (new outcome, new auto-apply criterion) | `reconcileEntry` + `ReconcileStatus` + `ReconcileReport` | `cli/commands/reconcile.ts` exit-code logic; `cli/commands/check.ts` failure flags. |
