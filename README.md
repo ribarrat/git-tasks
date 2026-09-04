@@ -59,10 +59,8 @@ This works because the repo includes `.vscode/launch.json` configured with an `e
 
 ### CLI
 
-Once published to npm:
-
 ```bash
-npm install -g git-tasks
+npm i @ribarrat/git-tasks
 ```
 
 During development (in the repo root):

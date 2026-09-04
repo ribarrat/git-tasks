@@ -1,0 +1,37 @@
+{
+  "name": "@ribarrat/git-tasks",
+  "version": "0.1.0",
+  "description": "Annotate code with tasks, comments, and issues stored in your Git repo (CLI)",
+  "license": "MIT",
+  "author": "ribarrat",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ribarrat/git-tasks.git",
+    "directory": "npm-cli"
+  },
+  "homepage": "https://github.com/ribarrat/git-tasks#readme",
+  "bugs": {
+    "url": "https://github.com/ribarrat/git-tasks/issues"
+  },
+  "keywords": [
+    "git",
+    "tasks",
+    "todo",
+    "code-review",
+    "annotations",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "git-tasks": "dist/cli/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@ribarrat/git-tasks": "^0.1.0",
+    "commander": "^12.0.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "outDir": "npm-cli/dist",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "sourceMap": false,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "forceConsistentCasingInFileNames": true,
+    "declaration": false,
+    "types": ["node"]
+  },
+  "include": ["cli/**/*", "src/taskManager.ts", "src/types.ts", "src/gitHelper.ts"],
+  "exclude": ["node_modules", "out", "npm-cli", ".vscode-test"]
+}
