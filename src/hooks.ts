@@ -33,6 +33,15 @@ function preCommitBody(invocation: string): string {
 # Drift that can be auto-relocated is fixed in place and re-staged.
 ${invocation} reconcile --auto --quiet
 status=$?
+# 126/127 mean the shell could not execute the CLI at all (missing, or a
+# broken/non-executable link). That is not an annotation problem, so report it
+# and let the commit through rather than blocking with a misleading reason.
+if [ "$status" -eq 126 ] || [ "$status" -eq 127 ]; then
+  echo "" >&2
+  echo "git-tasks: cannot run '${invocation}' (exit $status) — skipping annotation check." >&2
+  echo "Reinstall the CLI, or run 'git-tasks uninstall-hooks' to remove this hook." >&2
+  exit 0
+fi
 if ! git diff --quiet -- .git-tasks 2>/dev/null; then
   git add .git-tasks
 fi

@@ -25,11 +25,13 @@
     "git-tasks": "./out/cli/index.js"
   },
   "scripts": {
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
     "compile": "tsc -p ./",
+    "postcompile": "node -e \"require('fs').chmodSync('out/cli/index.js', 0o755)\"",
     "build-cli": "tsc -p ./",
     "build-cli-npm": "tsc -p tsconfig.cli.json",
     "watch": "tsc -watch -p ./",
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run clean && npm run compile",
     "pretest": "npm run compile",
     "test": "vitest run",
     "test:watch": "vitest",

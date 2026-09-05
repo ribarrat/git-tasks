@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -60,6 +61,31 @@ describe('hooks module', () => {
     const after = fs.readFileSync(p, 'utf8');
     expect(after).toContain('echo "my own check"');
     expect(after).not.toContain(BEGIN_MARK);
+  });
+
+  it('pre-commit distinguishes an unrunnable CLI from stale annotations', () => {
+    installHooks(repo.root, 'git-tasks');
+    const body = fs.readFileSync(hookPath('pre-commit'), 'utf8');
+    // A missing or non-executable binary exits 126/127 via the shell; that must
+    // not be reported as an annotation problem.
+    expect(body).toContain('126');
+    expect(body).toContain('127');
+    expect(body).toMatch(/skipping annotation check/);
+  });
+
+  it('pre-commit exits 0 when the CLI cannot be executed', () => {
+    // Point the hook at a file that exists but is not executable.
+    const fake = path.join(repo.root, 'not-executable');
+    fs.writeFileSync(fake, 'echo nope\n', 'utf8');
+    fs.chmodSync(fake, 0o644);
+    installHooks(repo.root, fake);
+
+    const res = spawnSync('/bin/sh', [hookPath('pre-commit')], {
+      cwd: repo.root,
+      encoding: 'utf8',
+    });
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain('skipping annotation check');
   });
 
   it('uninstall removes hooks it fully owns and reports what it touched', () => {

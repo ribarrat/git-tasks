@@ -2,6 +2,8 @@
 .github/**
 .claude/**
 .git-tasks/**
+npm-cli/**
+tsconfig.cli.json
 src/**
 test/**
 docs/**
