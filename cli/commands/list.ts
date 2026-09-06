@@ -9,6 +9,7 @@ interface ListOpts {
   priority?: string;
   assignee?: string;
   mine?: boolean;
+  drifted?: boolean;
   json?: boolean;
 }
 
@@ -30,6 +31,7 @@ export function runList(file: string | undefined, opts: ListOpts): void {
       if (opts.type && e.type !== opts.type) continue;
       if (opts.status && e.status !== opts.status) continue;
       if (opts.priority && e.priority !== opts.priority) continue;
+      if (opts.drifted && !e.drift) continue;
       const mine = isCurrentUser(repoRoot, e.assignee);
       if (opts.mine && !mine) continue;
       if (opts.assignee) {
@@ -52,7 +54,7 @@ export function runList(file: string | undefined, opts: ListOpts): void {
   }
 
   if (rows.length === 0) {
-    console.log(dim('No annotations found.'));
+    console.log(dim(opts.drifted ? 'No drifted annotations.' : 'No annotations found.'));
     return;
   }
 
@@ -71,7 +73,9 @@ export function runList(file: string | undefined, opts: ListOpts): void {
       ? `${r.entry.line}-${r.entry.endLine}`
       : `${r.entry.line}`;
     const marker = r.mine ? '→' : ' ';
-    const text = truncate(r.entry.text, 40) + (r.mine ? ' (assigned to you)' : '');
+    const drift = r.entry.drift ? ` [drift: ${r.entry.drift.kind}]` : '';
+    const text =
+      truncate(r.entry.text, 40) + drift + (r.mine ? ' (assigned to you)' : '');
     const line = [
       marker,
       shortId(r.entry.id).padEnd(8),

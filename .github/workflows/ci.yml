@@ -40,8 +40,12 @@ jobs:
       - run: npm ci
       - run: npm run compile
 
-      - name: Reconcile sanity — fail on stale or orphan annotations
-        run: node out/cli/index.js check --fail-on stale,orphan
+      # Report-only: annotation drift is never a reason to block a PR. It is
+      # recorded on the entries as a `drift` mark and surfaced in the sticky
+      # comment and step summary below. (`--fail-on` exists for teams that want
+      # the old gate; we deliberately do not pass it.)
+      - name: Reconcile sanity — report drift
+        run: node out/cli/index.js check
 
       - name: Block PRs that introduce open critical issues on changed files
         run: |
@@ -124,10 +128,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -135,22 +142,40 @@ jobs:
       - run: npm ci
       - run: npm run compile
 
-      # Reconcile in-place. If anything is auto-moved on main itself, it means
-      # a contributor merged without the pre-commit / post-merge hooks installed.
-      # We fail the audit so the team notices.
+      # Reconcile in-place and push the result back. Annotations are metadata
+      # about the code, not a property of it: if they drifted on main, the fix
+      # is to settle them, not to redden the build for everyone downstream.
+      # Drift that cannot be auto-relocated is recorded as a `drift` mark on the
+      # entry by this same run, so it stays visible without blocking anything.
       - name: Reconcile on main
         run: node out/cli/index.js reconcile
 
-      - name: Fail audit if reconcile touched annotations on main
+      - name: Commit reconciled annotations back to main
         run: |
-          if ! git diff --quiet -- .git-tasks 2>/dev/null; then
-            echo "::error::Reconcile applied moves to annotations on main."
-            echo "A contributor merged without local hooks (\`git-tasks install-hooks\`)."
-            echo ""
-            echo "Diff:"
-            git --no-pager diff -- .git-tasks
-            exit 1
+          if git diff --quiet -- .git-tasks 2>/dev/null; then
+            echo "Annotations already settled on main."
+            exit 0
           fi
+          echo "::notice::Reconcile settled annotations on main; committing the result."
+          git --no-pager diff -- .git-tasks
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .git-tasks
+          git commit -m "chore(git-tasks): reconcile annotations on main [skip ci]"
+          # Another push may have landed while we were building. Rebasing and
+          # retrying is best-effort: failing to record reconciled metadata is
+          # not a reason to fail the job, and the next push re-runs this.
+          git pull --rebase --autostash origin main || true
+          git push || echo "::warning::Could not push reconciled annotations; the next run will retry."
 
-      - name: Final check
-        run: node out/cli/index.js check --fail-on stale,orphan
+      # Report only — never changes the job's outcome.
+      - name: Drift report
+        if: always()
+        run: |
+          {
+            echo "## git-tasks post-merge audit"
+            echo ""
+            echo '```'
+            node out/cli/index.js check
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

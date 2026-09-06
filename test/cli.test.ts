@@ -147,13 +147,37 @@ describe('CLI — reconcile', () => {
     expect(reloaded.entries[0].line).toBe(entry.line); // unchanged
   });
 
-  it('exits 1 when entries are orphaned (source file deleted)', () => {
+  it('exits 0 and marks the entry when it is orphaned (source file deleted)', () => {
     seed(repo);
     fs.unlinkSync(path.join(repo.root, SAMPLE_PATH));
-    const { status, stdout } = runCliAllowFail(repo.root, ['reconcile', '--json']);
-    expect(status).toBe(1);
+    const { status, stdout } = runCli(repo.root, ['reconcile', '--json']);
+    expect(status).toBe(0);
     const report = JSON.parse(stdout);
     expect(report.orphan).toHaveLength(1);
+    expect(report.marked).toBe(1);
+    expect(repo.readAnnotationFile(SAMPLE_PATH).entries[0].drift!.kind).toBe('orphan');
+  });
+
+  it('--strict restores the non-zero exit for unresolvable drift', () => {
+    seed(repo);
+    fs.unlinkSync(path.join(repo.root, SAMPLE_PATH));
+    const { status, stdout } = runCliAllowFail(repo.root, ['reconcile', '--json', '--strict']);
+    expect(status).toBe(1);
+    expect(JSON.parse(stdout).orphan).toHaveLength(1);
+  });
+
+  it('--strict still marks the entry before failing', () => {
+    seed(repo);
+    fs.unlinkSync(path.join(repo.root, SAMPLE_PATH));
+    runCliAllowFail(repo.root, ['reconcile', '--strict']);
+    expect(repo.readAnnotationFile(SAMPLE_PATH).entries[0].drift).toBeDefined();
+  });
+
+  it('--strict exits 0 when drift was fully auto-resolved', () => {
+    seed(repo);
+    repo.writeFile(SAMPLE_PATH, '// new header\n' + SAMPLE_CONTENT);
+    const { status } = runCli(repo.root, ['reconcile', '--strict']);
+    expect(status).toBe(0);
   });
 });
 
@@ -170,6 +194,34 @@ describe('CLI — check (CI gate)', () => {
     seed(repo);
     const { status } = runCli(repo.root, ['check']);
     expect(status).toBe(0);
+  });
+
+  it('exits 0 on unresolvable drift unless --fail-on is passed', () => {
+    seed(repo);
+    fs.unlinkSync(path.join(repo.root, SAMPLE_PATH));
+    const { status } = runCli(repo.root, ['check']);
+    expect(status).toBe(0);
+  });
+
+  it('reports recorded drift marks in JSON', () => {
+    seed(repo);
+    fs.unlinkSync(path.join(repo.root, SAMPLE_PATH));
+    runCli(repo.root, ['reconcile']);
+    const { stdout } = runCli(repo.root, ['check', '--format', 'json']);
+    const report = JSON.parse(stdout);
+    expect(report.drifted).toHaveLength(1);
+    expect(report.drifted[0].kind).toBe('orphan');
+  });
+
+  it('list --drifted filters to marked entries', () => {
+    seed(repo);
+    const { stdout: before } = runCli(repo.root, ['list', '--drifted']);
+    expect(before).toContain('No drifted annotations');
+
+    fs.unlinkSync(path.join(repo.root, SAMPLE_PATH));
+    runCli(repo.root, ['reconcile']);
+    const { stdout: after } = runCli(repo.root, ['list', '--drifted']);
+    expect(after).toContain('drift: orphan');
   });
 
   it('--fail-on orphan trips when source files are missing', () => {

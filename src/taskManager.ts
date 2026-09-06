@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AnnotationEntry,
   AnnotationFile,
+  EntryDrift,
   EntryOrigin,
   EntryPriority,
   EntrySeverity,
@@ -281,12 +282,24 @@ export interface ReconcileItem {
   file: string;
   entry: AnnotationEntry;
   result: ReconcileResult;
+  /**
+   * Where the entry was pinned *before* this run. Captured by value because
+   * `entry` is a live reference that `relocateEntry` mutates in place — reading
+   * `entry.line` after an applied move would report the destination as the
+   * origin and render every "from → to" line a no-op.
+   */
+  fromLine: number;
+  fromEndLine?: number;
 }
 
 export interface ReconcileReport {
   total: number;
   ok: number;
   applied: number;
+  /** Entries newly carrying (or still carrying) a drift mark after this run. */
+  marked: number;
+  /** Entries whose drift mark was removed because they pin cleanly again. */
+  cleared: number;
   moved: ReconcileItem[];
   softMatch: ReconcileItem[];
   stale: ReconcileItem[];
@@ -445,6 +458,58 @@ export function relocateEntry(
 }
 
 /**
+ * Record an unresolvable drift on the entry. The annotation keeps its current
+ * pin — we never guess — but carries a mark describing what reconcile found so
+ * tooling can surface it instead of a pipeline having to fail over it.
+ *
+ * `detectedAt` is preserved while the same kind of drift persists, so the mark
+ * answers "since when" rather than "as of the last run". Deliberately does NOT
+ * touch `updatedAt`: that field is the merge driver's last-writer-wins
+ * tiebreaker for human edits, and a machine-derived mark must not win it.
+ *
+ * Returns true when the mark changed, i.e. the file needs persisting.
+ */
+export function markDrift(entry: AnnotationEntry, result: ReconcileResult): boolean {
+  const kind = result.status;
+  if (kind !== 'soft-match' && kind !== 'stale' && kind !== 'orphan') return false;
+  const next: EntryDrift = {
+    kind,
+    detectedAt:
+      entry.drift?.kind === kind ? entry.drift.detectedAt : new Date().toISOString(),
+    line: entry.line,
+    lineContent: entry.lineContent,
+  };
+  if (entry.endLine !== undefined) next.endLine = entry.endLine;
+  if (result.newLine !== undefined) next.suggestedLine = result.newLine;
+  if (result.newEndLine !== undefined && result.newEndLine !== result.newLine) {
+    next.suggestedEndLine = result.newEndLine;
+  }
+  if (driftEqual(entry.drift, next)) return false;
+  entry.drift = next;
+  return true;
+}
+
+/** Drop a drift mark once the entry pins cleanly again. Returns true if one was removed. */
+export function clearDrift(entry: AnnotationEntry): boolean {
+  if (!entry.drift) return false;
+  delete entry.drift;
+  return true;
+}
+
+function driftEqual(a: EntryDrift | undefined, b: EntryDrift): boolean {
+  if (!a) return false;
+  return (
+    a.kind === b.kind &&
+    a.detectedAt === b.detectedAt &&
+    a.line === b.line &&
+    a.endLine === b.endLine &&
+    a.lineContent === b.lineContent &&
+    a.suggestedLine === b.suggestedLine &&
+    a.suggestedEndLine === b.suggestedEndLine
+  );
+}
+
+/**
  * Reconcile every entry in one already-loaded annotation file against its
  * source. Mutates `af` when `apply` is set; the caller persists it.
  */
@@ -458,7 +523,13 @@ function reconcileLoadedFile(
   for (const entry of af.entries) {
     report.total++;
     const result = reconcileEntry(sourceContent, entry);
-    const item: ReconcileItem = { file: af.file, entry, result };
+    const item: ReconcileItem = {
+      file: af.file,
+      entry,
+      result,
+      fromLine: entry.line,
+      fromEndLine: entry.endLine,
+    };
     switch (result.status) {
       case 'ok':
         report.ok++;
@@ -480,6 +551,20 @@ function reconcileLoadedFile(
         report.orphan.push(item);
         break;
     }
+    if (opts.apply) {
+      // Resolved one way or another (exact pin or a relocation we trust) ⇒ the
+      // mark, if any, no longer describes reality. Otherwise record the drift
+      // on the entry so it is visible without anything having to fail.
+      if (result.status === 'ok' || result.status === 'moved') {
+        if (clearDrift(entry)) {
+          mutated = true;
+          report.cleared++;
+        }
+      } else {
+        if (markDrift(entry, result)) mutated = true;
+        report.marked++;
+      }
+    }
   }
   return mutated;
 }
@@ -489,6 +574,8 @@ function emptyReport(): ReconcileReport {
     total: 0,
     ok: 0,
     applied: 0,
+    marked: 0,
+    cleared: 0,
     moved: [],
     softMatch: [],
     stale: [],
@@ -574,13 +661,21 @@ export function mergeEntry(
   const origin = ancestor?.origin ?? ours.origin ?? theirs.origin;
   if (origin) out.origin = origin;
   else delete out.origin;
+  // `drift` is derived state that the next reconcile recomputes, and it is
+  // written without bumping `updatedAt`, so the last-writer-wins tiebreaker
+  // below cannot decide it meaningfully. Prefer whichever side actually has a
+  // mark (absence usually just means that side never ran reconcile), and on a
+  // genuine disagreement keep the one observed first.
+  const drift = pickDrift(ours.drift, theirs.drift);
+  if (drift) out.drift = drift;
+  else delete out.drift;
   const allKeys = new Set<EntryField>([
     ...(Object.keys(ours) as EntryField[]),
     ...(Object.keys(theirs) as EntryField[]),
     ...(ancestor ? (Object.keys(ancestor) as EntryField[]) : []),
   ]);
   for (const f of allKeys) {
-    if (IMMUTABLE_FIELDS.includes(f)) continue;
+    if (IMMUTABLE_FIELDS.includes(f) || f === 'drift') continue;
     const a = ours[f] as unknown;
     const b = theirs[f] as unknown;
     const o = ancestor ? (ancestor[f] as unknown) : undefined;
@@ -617,6 +712,15 @@ export function mergeEntry(
       ? ours.updatedAt
       : theirs.updatedAt;
   return out;
+}
+
+function pickDrift(
+  a: EntryDrift | undefined,
+  b: EntryDrift | undefined,
+): EntryDrift | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return Date.parse(a.detectedAt) <= Date.parse(b.detectedAt) ? a : b;
 }
 
 export type MergeOutcome =

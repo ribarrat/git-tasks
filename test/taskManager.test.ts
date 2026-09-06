@@ -401,6 +401,9 @@ describe('taskManager — reconcileEntry / reconcileAll', () => {
     await new Promise((r) => setTimeout(r, 5));
     const applyReport = reconcileAll(repo.root, { apply: true });
     expect(applyReport.applied).toBe(1);
+    // The report must describe the move, not the post-move state.
+    expect(applyReport.moved[0].fromLine).toBe(2);
+    expect(applyReport.moved[0].result.newLine).toBe(3);
 
     const postEntry = loadAnnotationFile(repo.root, SAMPLE_FILE)!.entries[0];
     expect(postEntry.line).toBe(3);
@@ -412,6 +415,103 @@ describe('taskManager — reconcileEntry / reconcileAll', () => {
     const report = reconcileAll(repo.root, { apply: false });
     expect(report.orphan).toHaveLength(1);
     expect(report.orphan[0].file).toBe('src/gone.ts');
+  });
+});
+
+describe('taskManager — drift marks', () => {
+  let repo: TempRepo;
+  beforeEach(() => {
+    repo = makeTempRepo();
+    repo.writeFile(SAMPLE_FILE, SAMPLE_CONTENT);
+  });
+  afterEach(() => repo.cleanup());
+
+  it('marks stale entries instead of leaving them unrecorded', () => {
+    repo.writeFile(SAMPLE_FILE, 'totally\nunrelated\ncontent');
+    addEntry(repo.root, SAMPLE_FILE, seedEntry());
+
+    const report = reconcileAll(repo.root, { apply: true });
+    expect(report.stale).toHaveLength(1);
+    expect(report.marked).toBe(1);
+
+    const drift = repo.readAnnotationFile(SAMPLE_FILE).entries[0].drift!;
+    expect(drift.kind).toBe('stale');
+    expect(drift.line).toBe(2);
+    expect(drift.lineContent).toBe('  return `hello, ${name}`;');
+    expect(drift.suggestedLine).toBeUndefined();
+  });
+
+  it('marks orphans when the source file is gone', () => {
+    addEntry(repo.root, 'src/gone.ts', seedEntry());
+    reconcileAll(repo.root, { apply: true });
+    expect(repo.readAnnotationFile('src/gone.ts').entries[0].drift!.kind).toBe('orphan');
+  });
+
+  it('records the suggested line for a soft match but does not repin', () => {
+    const snapshot = ['const a = 1;', 'const b = 2;', 'const c = 3;', 'const d = 4;'].join('\n');
+    repo.writeFile(
+      SAMPLE_FILE,
+      ['noise', 'const a = 1;', 'const b = 99;', 'const c = 3;', 'const d = 4;'].join('\n'),
+    );
+    addEntry(repo.root, SAMPLE_FILE, seedEntry({ lineContent: snapshot, line: 2, endLine: 5 }));
+
+    reconcileAll(repo.root, { apply: true });
+    const entry = repo.readAnnotationFile(SAMPLE_FILE).entries[0];
+    expect(entry.line).toBe(2);
+    expect(entry.lineContent).toBe(snapshot);
+    expect(entry.drift!.kind).toBe('soft-match');
+    expect(entry.drift!.suggestedLine).toBe(2);
+  });
+
+  it('does not write marks on a dry run', () => {
+    repo.writeFile(SAMPLE_FILE, 'totally\nunrelated\ncontent');
+    addEntry(repo.root, SAMPLE_FILE, seedEntry());
+    const report = reconcileAll(repo.root, { apply: false });
+    expect(report.marked).toBe(0);
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].drift).toBeUndefined();
+  });
+
+  it('leaves updatedAt untouched so a mark cannot win the merge tiebreaker', () => {
+    repo.writeFile(SAMPLE_FILE, 'totally\nunrelated\ncontent');
+    const entry = seedEntry();
+    addEntry(repo.root, SAMPLE_FILE, entry);
+    reconcileAll(repo.root, { apply: true });
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].updatedAt).toBe(entry.updatedAt);
+  });
+
+  it('keeps detectedAt stable while the same drift persists', async () => {
+    repo.writeFile(SAMPLE_FILE, 'totally\nunrelated\ncontent');
+    addEntry(repo.root, SAMPLE_FILE, seedEntry());
+    reconcileAll(repo.root, { apply: true });
+    const first = repo.readAnnotationFile(SAMPLE_FILE).entries[0].drift!.detectedAt;
+
+    await new Promise((r) => setTimeout(r, 5));
+    reconcileAll(repo.root, { apply: true });
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].drift!.detectedAt).toBe(first);
+  });
+
+  it('clears the mark once the entry pins cleanly again', () => {
+    repo.writeFile(SAMPLE_FILE, 'totally\nunrelated\ncontent');
+    addEntry(repo.root, SAMPLE_FILE, seedEntry());
+    reconcileAll(repo.root, { apply: true });
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].drift).toBeDefined();
+
+    repo.writeFile(SAMPLE_FILE, SAMPLE_CONTENT);
+    const report = reconcileAll(repo.root, { apply: true });
+    expect(report.cleared).toBe(1);
+    expect(repo.readAnnotationFile(SAMPLE_FILE).entries[0].drift).toBeUndefined();
+  });
+
+  it('clears the mark when the entry is auto-relocated', () => {
+    repo.writeFile(SAMPLE_FILE, 'totally\nunrelated\ncontent');
+    addEntry(repo.root, SAMPLE_FILE, seedEntry());
+    reconcileAll(repo.root, { apply: true });
+
+    repo.writeFile(SAMPLE_FILE, ['// new header', ...SAMPLE_CONTENT.split('\n')].join('\n'));
+    reconcileAll(repo.root, { apply: true });
+    const entry = repo.readAnnotationFile(SAMPLE_FILE).entries[0];
+    expect(entry.line).toBe(3);
+    expect(entry.drift).toBeUndefined();
   });
 });
 
@@ -492,6 +592,42 @@ describe('taskManager — three-way merge', () => {
     expect(merged.createdAt).toBe(ours.createdAt);
     expect(merged.commitSHA).toBe(ours.commitSHA);
     expect(merged.author).toBe(ours.author);
+  });
+
+  it('mergeEntry: a drift mark on one side survives the merge', () => {
+    const ancestor = baseEntry();
+    const ours = baseEntry();
+    const theirs: AnnotationEntry = {
+      ...ancestor,
+      drift: {
+        kind: 'stale',
+        detectedAt: '2026-03-01T00:00:00.000Z',
+        line: 10,
+        lineContent: 'gone();',
+      },
+    };
+    // Note `updatedAt` is identical on both sides — marks do not bump it — so
+    // this can only pass if drift is resolved outside the last-writer-wins path.
+    expect(mergeEntry(ancestor, ours, theirs).drift?.kind).toBe('stale');
+    expect(mergeEntry(ancestor, theirs, ours).drift?.kind).toBe('stale');
+  });
+
+  it('mergeEntry: two disagreeing drift marks keep the one observed first', () => {
+    const ancestor = baseEntry();
+    const ours: AnnotationEntry = {
+      ...ancestor,
+      drift: { kind: 'stale', detectedAt: '2026-03-05T00:00:00.000Z', line: 1, lineContent: 'a' },
+    };
+    const theirs: AnnotationEntry = {
+      ...ancestor,
+      drift: {
+        kind: 'soft-match',
+        detectedAt: '2026-03-01T00:00:00.000Z',
+        line: 1,
+        lineContent: 'a',
+      },
+    };
+    expect(mergeEntry(ancestor, ours, theirs).drift?.kind).toBe('soft-match');
   });
 
   it('mergeAnnotationFiles: unions independently-added entries by id', () => {

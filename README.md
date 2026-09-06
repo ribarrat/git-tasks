@@ -192,7 +192,7 @@ Each annotated source file gets its own JSON file under `.git-tasks/`, mirroring
 
 ```jsonc
 {
-  "version": "1.1",
+  "version": "1.2",
   "file": "src/utils/auth.js",
   "entries": [
     {
@@ -216,6 +216,13 @@ Each annotated source file gets its own JSON file under `.git-tasks/`, mirroring
         "line": 17,
         "lineContent": "const user = ...",
         "commitSHA": "<40-char SHA>"
+      },
+      "drift": {                           // optional; present only while drift is unresolved
+        "kind": "stale",                   // soft-match | stale | orphan
+        "detectedAt": "2026-06-20T09:00:00Z",
+        "line": 42,
+        "lineContent": "const user = ...",
+        "suggestedLine": 61                // soft-match only; a candidate, never applied
       }
     }
   ]
@@ -362,18 +369,49 @@ Registers a custom three-way merge driver for `.git-tasks/**/*.json`. When both 
 
 The installer registers `merge.git-tasks-json.driver` in `.git/config` and appends `.git-tasks/**/*.json merge=git-tasks-json` to `.gitattributes`. Commit `.gitattributes` so the driver applies for every collaborator. Remove with `git-tasks uninstall-merge-driver`.
 
+### Drift is recorded, not fatal
+
+Annotations are metadata *about* code, not a property of it, so drift in them must never stop a build. When `reconcile` finds an entry it cannot confidently repin, it records the fact on the entry itself and exits 0:
+
+```jsonc
+{
+  "id": "c0ffee01-…",
+  "line": 351,
+  "lineContent": "  threshold = 0.7,",
+  "drift": {
+    "kind": "stale",              // soft-match | stale | orphan
+    "detectedAt": "2026-09-06T12:00:00.000Z",
+    "line": 351,                   // where it was pinned when drift was seen
+    "lineContent": "  threshold = 0.7,",
+    "suggestedLine": 402           // soft-match only — a candidate, never applied
+  }
+}
+```
+
+The mark is derived state: every `reconcile` recomputes it, and it is **cleared automatically** the moment the entry pins cleanly again or is successfully relocated. `detectedAt` is preserved while the same drift persists, so it answers *since when*. Marking deliberately does not touch `updatedAt`, so a machine-written mark can never win the merge driver's last-writer-wins tiebreaker against a human edit.
+
+Review what is drifted with `git-tasks list --drifted`, or in the extension — hovers show the kind and the date.
+
+Nothing in CI fails on this by default. Two explicit opt-ins exist for teams that want the old behavior:
+
+- `git-tasks reconcile --strict` — exit 1 when drift could not be auto-resolved. This is what the local `pre-commit` hook uses.
+- `git-tasks check --fail-on stale,orphan` — exit 1 on the listed conditions.
+
 ### `git-tasks check`
 
-Designed for `pull_request` CI. Reports drift / soft-match / stale / orphan counts, and optionally fails the build on configurable conditions:
+Designed for `pull_request` CI. Reports drift / soft-match / stale / orphan counts plus any recorded drift marks. **Exits 0 unless you ask it to fail:**
 
 ```bash
-# fail if any annotations are stale or orphaned
+# report only — the default
+git-tasks check
+
+# opt in: fail if any annotations are stale or orphaned
 git-tasks check --fail-on stale,orphan
 
 # fail if the PR touches a file with an open critical annotation
 git-tasks check --fail-on-open-severity critical --base origin/main
 
-# machine-readable
+# machine-readable (includes a `drifted` array of recorded marks)
 git-tasks check --format json
 ```
 
@@ -392,7 +430,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - run: npm i -g git-tasks
-      - run: git-tasks check --fail-on stale,orphan --fail-on-open-severity critical --base origin/${{ github.base_ref }}
+      # Report drift; only the critical-severity policy can fail the PR.
+      - run: git-tasks check --fail-on-open-severity critical --base origin/${{ github.base_ref }}
 ```
 
 ### Suggested one-time setup for a team
@@ -404,13 +443,13 @@ git add .gitattributes
 git commit -m "git-tasks: enable auto-reconcile on merge"
 ```
 
-After that, line shifts heal silently on pull, concurrent annotation edits merge without textual conflicts, and CI gates everything else.
+After that, line shifts heal silently on pull, concurrent annotation edits merge without textual conflicts, drift that cannot heal is marked on the entry, and CI reports rather than blocks.
 
 `install-hooks` writes three managed blocks:
 
 | Hook | Behavior |
 |---|---|
-| `pre-commit` | Auto-relocates drifted annotations and re-stages them; **blocks the commit** if anything is `stale` or `orphan`. |
+| `pre-commit` | Auto-relocates drifted annotations, marks what it cannot relocate, and re-stages them. Runs `reconcile --strict`, so it **blocks the commit** if anything is `stale` or `orphan` — deliberately local-only friction; bypass with `--no-verify`. |
 | `post-merge` | Runs `reconcile --auto --quiet` after every `git pull`, so line shifts that landed on the remote heal locally on the next pull. |
 | `post-checkout` | Same as `post-merge`, but on branch checkout. |
 
@@ -426,9 +465,9 @@ Four real entries pinned to current source — every CI integration below operat
 
 | File:line | Type | Tags | Showcases |
 |---|---|---|---|
-| `src/taskManager.ts:321` | task | `enhancement, good-first-issue, onboarding` | AI-agent + onboarding workflow (assigned to `claude`) |
-| `src/taskManager.ts:533` | comment | `merge-driver, onboarding` | **Annotation pinned to the line it describes** — reorganising the merge driver triggers drift on this entry |
-| `cli/commands/check.ts:54` | task | `enhancement, cli, onboarding` | AI-agent task with a concrete implementation hint |
+| `src/taskManager.ts:364` | task | `enhancement, good-first-issue, onboarding` | AI-agent + onboarding workflow (assigned to `claude`) |
+| `src/taskManager.ts:734` | comment | `merge-driver, onboarding` | **Annotation pinned to the line it describes** — reorganising the merge driver triggers drift on this entry |
+| `cli/commands/check.ts:59` | task | `enhancement, cli, onboarding` | AI-agent task with a concrete implementation hint |
 | `cli/invocation.ts:14` | issue (`severity: major`) | `windows, portability` | CI's `--fail-on-open-severity critical --base …` gate (triggers when a PR also edits this file) |
 
 Try `git-tasks list --mine`, `git-tasks list --tag onboarding`, or `git-tasks list --tag merge-driver` after cloning.
@@ -438,8 +477,8 @@ Try `git-tasks list --mine`, `git-tasks list --tag onboarding`, or `git-tasks li
 | File | When | What it does |
 |---|---|---|
 | `ci.yml` → `build` | every push / PR | tsc build |
-| `ci.yml` → `pre-merge-check` | PRs | `git-tasks check --fail-on stale,orphan`, blocks PRs that introduce open `critical` issues on the diff, emits **GitHub Checks inline annotations** for every entry on a changed file, and posts a **sticky PR comment** with the full report |
-| `ci.yml` → `post-merge-audit` | push to `main` | runs `reconcile` on main; **fails if anything moved**, signalling a contributor merged without local hooks installed |
+| `ci.yml` → `pre-merge-check` | PRs | `git-tasks check` (report only — drift never blocks a PR), blocks PRs that introduce open `critical` issues on the diff, emits **GitHub Checks inline annotations** for every entry on a changed file, and posts a **sticky PR comment** with the full report |
+| `ci.yml` → `post-merge-audit` | push to `main` | runs `reconcile` on main and **commits the settled annotations back** in a bot commit; anything unresolvable is left carrying a `drift` mark. Reports, never fails |
 | `auto-resolve.yml` | push to `main` | scans the merge commit message for `closes git-tasks: <id>` (also `gt-closes <id>`) and auto-resolves the matching entries in a bot-authored follow-up commit |
 | `weekly-report.yml` | every Monday + manual | runs `git-tasks stats --sla-days 30`, publishes the report to the workflow summary, fails on aged criticals, and opens / updates a tracking GitHub Issue when it does |
 
@@ -447,7 +486,7 @@ Try `git-tasks list --mine`, `git-tasks list --tag onboarding`, or `git-tasks li
 
 | Hook | Behavior |
 |---|---|
-| `pre-commit` | Auto-relocates drifted annotations and re-stages them; **blocks the commit** if anything is `stale` or `orphan`. |
+| `pre-commit` | Auto-relocates drifted annotations, marks what it cannot relocate, and re-stages them. Runs `reconcile --strict`, so it **blocks the commit** if anything is `stale` or `orphan` — deliberately local-only friction; bypass with `--no-verify`. |
 | `post-merge` | Runs `reconcile --auto --quiet` after every `git pull`, so line shifts that landed on the remote heal locally on the next pull. |
 | `post-checkout` | Same as `post-merge`, but on branch checkout. |
 

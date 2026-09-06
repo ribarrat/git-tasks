@@ -47,6 +47,7 @@ program
   .option('--priority <priority>', 'high | medium | low')
   .option('--assignee <assignee>', 'Name or email')
   .option('--mine', 'Only show annotations assigned to the current git user')
+  .option('--drifted', 'Only show annotations carrying a drift mark')
   .option('--json', 'Output JSON')
   .action((file: string | undefined, opts) => runList(file, opts));
 
@@ -84,13 +85,17 @@ program
   .option('--dry-run', 'Report what would change without writing anything')
   .option('--quiet', 'Minimal output (for hooks)')
   .option('--json', 'Output JSON')
+  .option(
+    '--strict',
+    'Exit non-zero when drift could not be auto-resolved. Off by default: drift is recorded on the entries instead.',
+  )
   .action((opts) => runReconcile(opts));
 
 program
   .command('check')
-  .description('CI gate: report drift / stale / orphan annotations, optionally fail on open severities in changed files.')
+  .description('Report drift / stale / orphan annotations, optionally fail on open severities in changed files. Reports only unless a --fail-on flag is given.')
   .option('--format <format>', 'text | json', 'text')
-  .option('--fail-on <list>', 'Comma-separated: drift,soft-match,stale,orphan')
+  .option('--fail-on <list>', 'Comma-separated: drift,soft-match,stale,orphan (opt-in; nothing fails without it)')
   .option('--fail-on-open-severity <list>', 'Comma-separated: critical,major,minor,trivial')
   .option('--base <ref>', 'Git ref to scope --fail-on-open-severity to changed files (e.g. origin/main)')
   .action((opts) => runCheck(opts));

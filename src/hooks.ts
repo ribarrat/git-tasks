@@ -30,8 +30,11 @@ ${END_MARK}
 function preCommitBody(invocation: string): string {
   return `${BEGIN_MARK}
 # Block commits that would leave stale or orphan annotations behind.
-# Drift that can be auto-relocated is fixed in place and re-staged.
-${invocation} reconcile --auto --quiet
+# Drift that can be auto-relocated is fixed in place and re-staged; drift that
+# cannot is marked on the entry either way. --strict is what makes this hook
+# *also* refuse the commit — it is local, opt-in friction, and deliberately not
+# mirrored in CI, where annotations never block the pipeline.
+${invocation} reconcile --auto --quiet --strict
 status=$?
 # 126/127 mean the shell could not execute the CLI at all (missing, or a
 # broken/non-executable link). That is not an annotation problem, so report it
@@ -48,7 +51,8 @@ fi
 if [ "$status" -ne 0 ]; then
   echo "" >&2
   echo "git-tasks: commit blocked — stale or orphan annotations." >&2
-  echo "Run 'git-tasks reconcile' for details, then update or remove them." >&2
+  echo "They have been marked with a drift status. Run 'git-tasks list --drifted'" >&2
+  echo "to review, then repin or remove them — or commit with --no-verify." >&2
   exit 1
 fi
 ${END_MARK}

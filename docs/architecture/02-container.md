@@ -75,6 +75,6 @@ Installed by `git-tasks install-hooks`. Each hook is a small shell block delimit
 1. **Create / mutate**: extension or CLI → engine → write `.git-tasks/<path>.json`.
 2. **Read / display**: extension watches `.git-tasks/` (via `AnnotationsWatcher`), reloads on change, repaints UI. CLI reads on demand.
 3. **Heal across merges**: hooks invoke `reconcile`; merge driver resolves concurrent JSON edits structurally instead of textually.
-4. **Gate CI**: workflow runs `check` / `diff` / `stats`; non-zero exit fails the build — blocking unresolved tasks from reaching main.
+4. **Report in CI**: workflow runs `check` / `diff` / `stats`. Annotation *drift* never fails a build — it is recorded on the entry as a `drift` mark. Only explicit policy opt-ins (`--fail-on-open-severity`, `--fail-on`, `--fail-on-aged-critical`) exit non-zero.
 
 Next: [Level 3 — Component](03-component.md).

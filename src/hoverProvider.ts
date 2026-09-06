@@ -106,9 +106,16 @@ function entryToMarkdown(repoRoot: string, e: AnnotationEntry, drifted: boolean)
     e.tags && e.tags.length > 0
       ? `\n\nTags: ${e.tags.map((t) => `\`${escapeHtml(t)}\``).join(' ')}`
       : '';
-  const driftStr = drifted
-    ? `\n\n> ⚠ The file content has changed since this annotation was written — lines may have moved.`
-    : '';
+  // A recorded mark is more specific than live drift detection — it says which
+  // kind of drift reconcile hit and when — so prefer it when present.
+  const driftStr = e.drift
+    ? `\n\n> ⚠ Drifted (\`${e.drift.kind}\`) since ${new Date(e.drift.detectedAt).toLocaleDateString()}` +
+      (e.drift.suggestedLine !== undefined
+        ? ` — reconcile suggests line ${e.drift.suggestedLine}.`
+        : ` — the pinned snapshot is no longer in the file.`)
+    : drifted
+      ? `\n\n> ⚠ The file content has changed since this annotation was written — lines may have moved.`
+      : '';
 
   const args = encodeURIComponent(JSON.stringify([e.id]));
   const editLink = `[Edit](command:git-tasks.editAnnotation?${args})`;

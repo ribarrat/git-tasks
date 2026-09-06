@@ -78,8 +78,9 @@ classDiagram
 - `origin` describes the entry's **first** position and is write-once: stamped by `createEntry`, preserved verbatim by `updateEntry`, and treated as immutable by `mergeEntry`. Pre-1.1 entries have none; `ensureOrigin` backfills from the current pin on the first relocation, so the value is always a position the entry genuinely held.
 - `line` ≤ `endLine`. `endLine` is omitted when the annotation covers a single line.
 - `text` is a one-line title; `description` is optional long-form context. Neither is interpreted by the engine.
-- `createdAt` and `updatedAt` are ISO-8601 UTC strings. `updatedAt` advances on every mutation — three-way merge relies on it.
-- `SCHEMA_VERSION` is `'1.1'`. It is written on every save, so a 1.0 file is upgraded in place the first time it is touched. Reads are version-tolerant: every 1.1 addition is optional, so 1.0 files load unchanged. Any *breaking* change here is a coordinated migration across engine, CLI, extension, and merge driver.
+- `createdAt` and `updatedAt` are ISO-8601 UTC strings. `updatedAt` advances on every *human* mutation — three-way merge relies on it as the last-writer-wins tiebreaker.
+- `drift` is **derived state**, and the only field on the entry that is not authored by a human. `reconcile --auto` recomputes it every run: written when an entry resolves to `soft-match` / `stale` / `orphan`, deleted when it resolves to `ok` / `moved`. Two consequences follow from it being derived. First, marking must not advance `updatedAt`, or a machine-written mark would outrank a concurrent human edit in `mergeEntry`. Second, since `updatedAt` therefore cannot order two competing marks, `mergeEntry` resolves `drift` outside the generic field loop (`pickDrift`): prefer the side that has a mark at all, and on disagreement keep the earlier `detectedAt`. `detectedAt` is likewise preserved across runs while the same `kind` persists, so it means "drifted since", not "last seen drifted".
+- `SCHEMA_VERSION` is `'1.2'`. It is written on every save, so an older file is upgraded in place the first time it is touched. Reads are version-tolerant: every 1.1 and 1.2 addition is optional, so 1.0 files load unchanged. Any *breaking* change here is a coordinated migration across engine, CLI, extension, and merge driver.
 
 ## 2. Reconcile flow
 
@@ -117,15 +118,18 @@ flowchart TD
 
 ### Outcomes
 
-| Outcome | Meaning | Auto-applied? | Exit code impact (in `reconcile` / `check`) |
-|---|---|---|---|
-| `ok` | Snapshot matches at the recorded line range. | n/a | none |
-| `moved` | Snapshot matches exactly at a different range. | yes (default) | none |
-| `soft-match` | Snapshot found with ≥70 % line-LCS but not byte-exact. | no — human / agent review | reported, doesn't fail |
-| `stale` | Snapshot no longer present in the file. | no | fails CI |
-| `orphan` | Source file was deleted. | n/a | fails CI |
+| Outcome | Meaning | Auto-applied? | Written to the entry | Exit code impact |
+|---|---|---|---|---|
+| `ok` | Snapshot matches at the recorded line range. | n/a | clears `drift` | none |
+| `moved` | Snapshot matches exactly at a different range. | yes (default) | new pin, `origin` frozen, clears `drift` | none |
+| `soft-match` | Snapshot found with ≥70 % line-LCS but not byte-exact. | no — human / agent review | `drift` mark with `suggestedLine` | none by default |
+| `stale` | Snapshot no longer present in the file. | no | `drift` mark | none by default |
+| `orphan` | Source file was deleted. | n/a | `drift` mark | none by default |
+
+Only two opt-ins turn the last three into a failure: `reconcile --strict` (used by the `pre-commit` hook) and `check --fail-on <list>`. Nothing else does, deliberately — see below.
 
 ### Why this shape
+- **Drift is recorded, never fatal.** Annotations describe code; they are not part of it. A pipeline that fails because a *comment about* line 321 now belongs on line 351 punishes every downstream consumer for a bookkeeping detail the tool can fix itself. So the unresolvable outcomes write a `drift` mark onto the entry and exit 0: the information is preserved, visible in `list --drifted` / `check` / the editor hover, and nothing is blocked. The one place blocking survives is the local `pre-commit` hook (`--strict`), where the friction lands on the one person who can act on it and is bypassable with `--no-verify`.
 - **Exact match before soft match** keeps confident moves silent and surfaces ambiguity only when needed.
 - **Soft match is read-only** by design: a 70 % LCS hit could be the same code with a refactor, *or* an accidentally similar block elsewhere. Auto-relocating it would silently corrupt the pin.
 - **`commitSHA` is the escape hatch.** Even if reconcile gives up (`stale` / `orphan`), the consumer can always `git show <commitSHA>:<file>` to recover the original context.
@@ -199,7 +203,7 @@ Implementation: [`mergeAnnotationFiles`](../../src/taskManager.ts#L533), [`merge
 | When reconcile runs | `src/extension.ts` (on save), `src/hooks.ts` (git hooks), `cli/commands/mergeDriver.ts` (merge) | All four paths funnel into `relocateEntry`; keep the relocation rule in one place rather than per-trigger. |
 | Drift / soft-match logic | `findSnapshotIn`, `softMatchSnapshot`, threshold constant | `test/taskManager.test.ts` covers these as pure functions — extend the cases. |
 | A new entry status / type / priority | `src/types.ts` unions + `ENTRY_*` arrays | Hover colors (`src/hoverProvider.ts`), sidebar `contextValue` (`src/sidebarProvider.ts`), CLI flag validation. |
-| Reconcile rules (new outcome, new auto-apply criterion) | `reconcileEntry` + `ReconcileStatus` + `ReconcileReport` | `cli/commands/reconcile.ts` exit-code logic; `cli/commands/check.ts` failure flags. |
+| Reconcile rules (new outcome, new auto-apply criterion) | `reconcileEntry` + `ReconcileStatus` + `ReconcileReport` | `markDrift` / `clearDrift` mapping; `cli/commands/reconcile.ts` `--strict` exit-code logic; `cli/commands/check.ts` failure flags. |
 | Merge semantics | `mergeEntry`, `mergeAnnotationFiles` | The merge driver is invoked outside the editor — there's no UI fallback. Add unit tests in `test/taskManager.test.ts`. |
 
 Back to [Level 1](01-context.md) · [Level 2](02-container.md) · [Level 3](03-component.md).

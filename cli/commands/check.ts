@@ -32,6 +32,11 @@ export function runCheck(opts: CheckOpts): void {
 
   const report = reconcileAll(repoRoot, { apply: false });
 
+  // Drift marks already recorded on the entries by a previous reconcile. These
+  // are informational: `check` reports them, and only fails if the caller
+  // explicitly opted in via --fail-on.
+  const driftMarks = listAllEntries(repoRoot).filter((e) => e.entry.drift);
+
   // Open-entry check (scoped to changed files when --base is given).
   const openHits: OpenHit[] = [];
   if (failSeverities.length > 0) {
@@ -67,6 +72,15 @@ export function runCheck(opts: CheckOpts): void {
           softMatch: report.softMatch.length,
           stale: report.stale.length,
           orphan: report.orphan.length,
+          drifted: driftMarks.map((d) => ({
+            file: d.file,
+            id: d.entry.id,
+            line: d.entry.line,
+            kind: d.entry.drift!.kind,
+            detectedAt: d.entry.drift!.detectedAt,
+            suggestedLine: d.entry.drift!.suggestedLine,
+            text: d.entry.text,
+          })),
           openHits: openHits.map((h) => ({
             file: h.file,
             id: h.entry.id,
@@ -86,6 +100,18 @@ export function runCheck(opts: CheckOpts): void {
     console.log(
       `${bold('git-tasks check')}: ${report.total} entries · ${report.ok} ok · ${report.moved.length} drifted · ${report.softMatch.length} soft-match · ${report.stale.length} stale · ${report.orphan.length} orphan`,
     );
+    if (driftMarks.length > 0) {
+      console.log('');
+      console.log(bold('Entries carrying a drift mark:'));
+      for (const d of driftMarks) {
+        const drift = d.entry.drift!;
+        const suggestion =
+          drift.suggestedLine !== undefined ? ` → suggested line ${drift.suggestedLine}` : '';
+        console.log(
+          `  ${shortId(d.entry.id)}  ${d.file}:${d.entry.line}  [${drift.kind}] since ${drift.detectedAt.slice(0, 10)}${suggestion}`,
+        );
+      }
+    }
     if (openHits.length > 0) {
       console.log('');
       console.log(bold(`Open entries matching --fail-on-open-severity:`));
@@ -101,6 +127,7 @@ export function runCheck(opts: CheckOpts): void {
     }
   }
 
+  // Drift never fails on its own — only an explicit --fail-on opt-in does.
   const fails: string[] = [];
   if (failOn.includes('drift') && report.moved.length > 0) fails.push('drift');
   if (failOn.includes('soft-match') && report.softMatch.length > 0) fails.push('soft-match');
