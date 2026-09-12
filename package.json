@@ -2,7 +2,7 @@
   "name": "git-tasks",
   "displayName": "Git Tasks",
   "description": "Annotate code with tasks, comments, and issues stored in your Git repo",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "ribarrat",
   "license": "MIT",
   "repository": {
