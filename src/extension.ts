@@ -27,7 +27,9 @@ import {
 import { findGitTasksOnPath, hooksInstalled, installHooks } from './hooks';
 import {
   DESCRIPTION_HEADER,
+  FLATTENED_HINT,
   InlineOutcome,
+  looksFlattened,
   resolveDescription,
   stripDescriptionHeader,
 } from './description';
@@ -185,6 +187,15 @@ function askInlineDescription(initial: string): Promise<InlineOutcome> {
     tooltip: 'Edit in editor…',
   };
   box.buttons = [editButton];
+  // A pasted markdown block arrives here already stripped of its newlines.
+  // Flag it in place rather than letting the structure vanish silently.
+  const flagFlattened = (value: string) => {
+    box.validationMessage = looksFlattened(value)
+      ? { message: FLATTENED_HINT, severity: vscode.InputBoxValidationSeverity.Warning }
+      : undefined;
+  };
+  flagFlattened(box.value);
+  box.onDidChangeValue(flagFlattened);
 
   return new Promise<InlineOutcome>((resolve) => {
     let settled = false;
@@ -210,7 +221,7 @@ function promptDescription(initial: string): Promise<string | undefined> {
   return resolveDescription(initial, {
     askInline: askInlineDescription,
     askEditor: editDescriptionInEditor,
-    notify: (message) => void vscode.window.showInformationMessage(message),
+    notify: (message) => void vscode.window.showWarningMessage(message, 'Got it'),
   });
 }
 

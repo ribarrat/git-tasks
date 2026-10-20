@@ -3,6 +3,7 @@ import {
   DESCRIPTION_HEADER,
   DescriptionEffects,
   EDITOR_DISMISSED_MESSAGE,
+  looksFlattened,
   InlineOutcome,
   resolveDescription,
   escapeHtml,
@@ -146,5 +147,42 @@ describe('resolveDescription', () => {
   it('never cancels the caller once the editor has been opened', async () => {
     const { fx } = effects({ kind: 'editor', value: '' }, undefined);
     await expect(resolveDescription('', fx)).resolves.not.toBeUndefined();
+  });
+});
+
+describe('looksFlattened', () => {
+  it('flags the exact run-on a pasted markdown block produces', () => {
+    // Verbatim from the smoke test: a block pasted into the input box.
+    expect(
+      looksFlattened(
+        'Hard-coded in two places.- [ ] move to config- [ ] add a testSee [pricing docs](https://example.com/pricing)',
+      ),
+    ).toBe(true);
+  });
+
+  it('flags a heading folded into the middle of a line', () => {
+    expect(looksFlattened('Intro text## Detailsmore')).toBe(true);
+  });
+
+  it('flags an implausibly long single line', () => {
+    expect(looksFlattened('x'.repeat(201))).toBe(true);
+    expect(looksFlattened('x'.repeat(200))).toBe(false);
+  });
+
+  it('stays quiet for ordinary one-line descriptions', () => {
+    expect(looksFlattened('Tax rate is hard-coded')).toBe(false);
+    expect(looksFlattened('')).toBe(false);
+    expect(looksFlattened('Fix the parser - it chokes on empty input')).toBe(false);
+    expect(looksFlattened('See [docs](https://example.com) for context')).toBe(false);
+  });
+
+  it('stays quiet when the text still has its newlines', () => {
+    // Came from the editor, so nothing was lost — never warn here.
+    expect(looksFlattened('Intro.\n\n- [ ] a\n- [ ] b')).toBe(false);
+    expect(looksFlattened('x'.repeat(300) + '\nmore')).toBe(false);
+  });
+
+  it('does not flag a checkbox that legitimately starts the value', () => {
+    expect(looksFlattened('- [ ] single item')).toBe(false);
   });
 });

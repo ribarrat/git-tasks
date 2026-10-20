@@ -97,3 +97,26 @@ export async function resolveDescription(
   fx.notify(EDITOR_DISMISSED_MESSAGE);
   return action.value.trim();
 }
+
+/**
+ * Heuristic: does this single-line value look like multi-line text that lost
+ * its structure on the way in?
+ *
+ * VS Code input boxes silently strip newlines from a paste, concatenating the
+ * lines, so pasting a markdown block produces a run-on string with no warning.
+ * Spotting the giveaways lets the prompt offer the editor instead of letting
+ * the line breaks disappear unnoticed.
+ */
+export function looksFlattened(value: string): boolean {
+  // Real newlines survived, so nothing was lost.
+  if (value.includes('\n')) return false;
+  // A task-list checkbox or heading marker mid-string only happens when
+  // something that began a line was folded into the middle of another.
+  if (/\S[ \t]*-[ \t]\[[ xX]\][ \t]*/.test(value)) return true;
+  if (/\S[ \t]*#{1,6}[ \t]+\S/.test(value)) return true;
+  // Long enough that it was almost certainly composed as paragraphs.
+  return value.length > 200;
+}
+
+export const FLATTENED_HINT =
+  'This looks like pasted multi-line text — an input box drops line breaks. Use the pencil to edit it in a real editor.';
