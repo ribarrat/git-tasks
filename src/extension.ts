@@ -26,6 +26,7 @@ import {
 } from './taskManager';
 import { findGitTasksOnPath, hooksInstalled, installHooks } from './hooks';
 import {
+  clipboardMatchesFlattened,
   DESCRIPTION_HEADER,
   FLATTENED_HINT,
   InlineOutcome,
@@ -133,20 +134,40 @@ async function editDescriptionInEditor(initial: string): Promise<string | undefi
 
   const result = await new Promise<string | undefined>((resolve) => {
     let settled = false;
+    const subs: vscode.Disposable[] = [];
     const settle = (value: string | undefined) => {
       if (settled) return;
       settled = true;
-      saveSub.dispose();
-      closeSub.dispose();
+      for (const sub of subs) sub.dispose();
       resolve(value);
     };
-    const saveSub = vscode.workspace.onDidSaveTextDocument((d) => {
-      if (isOurs(d)) settle(stripDescriptionHeader(d.getText()));
-    });
-    const closeSub = vscode.workspace.onDidCloseTextDocument((d) => {
-      // Closing after a save also fires this; `settled` keeps the save result.
-      if (isOurs(d)) settle(undefined);
-    });
+
+    subs.push(
+      vscode.workspace.onDidSaveTextDocument((d) => {
+        if (isOurs(d)) settle(stripDescriptionHeader(d.getText()));
+      }),
+    );
+
+    // Tab closure is the signal that actually tracks the user's gesture.
+    // onDidCloseTextDocument fires when VS Code *disposes* the document, which
+    // it does lazily — relying on it alone leaves the prompt waiting forever
+    // after the tab is gone, so the flow appears to hang with no notice.
+    subs.push(
+      vscode.window.tabGroups.onDidChangeTabs((e) => {
+        for (const tab of e.closed) {
+          const input = tab.input as { uri?: vscode.Uri } | undefined;
+          if (input?.uri?.fsPath === uri.fsPath) settle(undefined);
+        }
+      }),
+    );
+
+    // Kept as a backstop for closures the tab API does not report.
+    subs.push(
+      vscode.workspace.onDidCloseTextDocument((d) => {
+        // Closing after a save also fires this; `settled` keeps the save result.
+        if (isOurs(d)) settle(undefined);
+      }),
+    );
   });
 
   await closeDescriptionEditor(doc);
@@ -214,13 +235,30 @@ function askInlineDescription(initial: string): Promise<InlineOutcome> {
 }
 
 /**
+ * The input box has already deleted the newlines by the time the pencil is
+ * clicked, so seeding the editor from its value hands the user back the
+ * damaged single line. When the clipboard still holds the text they pasted,
+ * restore that instead — it is the only copy with the line breaks intact.
+ */
+async function recoverPastedText(value: string): Promise<string> {
+  if (!looksFlattened(value)) return value;
+  try {
+    const clip = await vscode.env.clipboard.readText();
+    if (clipboardMatchesFlattened(clip, value)) return clip;
+  } catch {
+    // Clipboard unavailable — fall back to what the box gave us.
+  }
+  return value;
+}
+
+/**
  * Prompt for a description. The branching lives in `resolveDescription` so it
  * can be tested without an editor; this only supplies the effects.
  */
 function promptDescription(initial: string): Promise<string | undefined> {
   return resolveDescription(initial, {
     askInline: askInlineDescription,
-    askEditor: editDescriptionInEditor,
+    askEditor: async (seed) => editDescriptionInEditor(await recoverPastedText(seed)),
     notify: (message) => void vscode.window.showWarningMessage(message, 'Got it'),
   });
 }

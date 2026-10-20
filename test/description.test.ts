@@ -3,6 +3,8 @@ import {
   DESCRIPTION_HEADER,
   DescriptionEffects,
   EDITOR_DISMISSED_MESSAGE,
+  clipboardMatchesFlattened,
+  flattenNewlines,
   looksFlattened,
   InlineOutcome,
   resolveDescription,
@@ -184,5 +186,48 @@ describe('looksFlattened', () => {
 
   it('does not flag a checkbox that legitimately starts the value', () => {
     expect(looksFlattened('- [ ] single item')).toBe(false);
+  });
+});
+
+describe('clipboardMatchesFlattened', () => {
+  // The exact text from the smoke test, and what the input box made of it.
+  const original = [
+    'Hard-coded in two places.',
+    '',
+    '- [ ] move to config',
+    '- [ ] add a test',
+    '',
+    'See [pricing docs](https://example.com/pricing)',
+  ].join('\n');
+  const flattened =
+    'Hard-coded in two places.- [ ] move to config- [ ] add a testSee [pricing docs](https://example.com/pricing)';
+
+  it('models how an input box mangles a paste', () => {
+    expect(flattenNewlines(original)).toBe(flattened);
+  });
+
+  it('recognises the clipboard as the source of the damaged line', () => {
+    expect(clipboardMatchesFlattened(original, flattened)).toBe(true);
+  });
+
+  it('tolerates trailing whitespace differences', () => {
+    expect(clipboardMatchesFlattened(original + '\n', flattened)).toBe(true);
+  });
+
+  it('handles CRLF clipboards', () => {
+    expect(clipboardMatchesFlattened(original.replace(/\n/g, '\r\n'), flattened)).toBe(true);
+  });
+
+  it('refuses unrelated clipboard contents', () => {
+    expect(clipboardMatchesFlattened('something else entirely', flattened)).toBe(false);
+  });
+
+  it('refuses when the user typed more after pasting', () => {
+    expect(clipboardMatchesFlattened(original, flattened + ' plus extra')).toBe(false);
+  });
+
+  it('ignores a single-line clipboard, which loses nothing', () => {
+    expect(clipboardMatchesFlattened('one line', 'one line')).toBe(false);
+    expect(clipboardMatchesFlattened('', '')).toBe(false);
   });
 });

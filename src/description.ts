@@ -120,3 +120,24 @@ export function looksFlattened(value: string): boolean {
 
 export const FLATTENED_HINT =
   'This looks like pasted multi-line text — an input box drops line breaks. Use the pencil to edit it in a real editor.';
+
+/**
+ * How a VS Code input box mangles a pasted block: newlines are deleted
+ * outright, with nothing put in their place, so the lines run together.
+ */
+export function flattenNewlines(s: string): string {
+  return s.replace(/\r?\n/g, '');
+}
+
+/**
+ * Is `value` the flattened remains of what is sitting on the clipboard?
+ *
+ * If so the original text — line breaks and all — is still recoverable, which
+ * is what lets the editor open with the user's real paste instead of the
+ * damaged single line the input box handed us.
+ */
+export function clipboardMatchesFlattened(clip: string, value: string): boolean {
+  if (!clip || !clip.includes('\n')) return false;
+  const flat = flattenNewlines(clip);
+  return flat === value || flat.trim() === value.trim();
+}
