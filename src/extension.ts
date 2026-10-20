@@ -25,7 +25,12 @@ import {
   updateEntry,
 } from './taskManager';
 import { findGitTasksOnPath, hooksInstalled, installHooks } from './hooks';
-import { DESCRIPTION_HEADER, stripDescriptionHeader } from './description';
+import {
+  DESCRIPTION_HEADER,
+  InlineOutcome,
+  resolveDescription,
+  stripDescriptionHeader,
+} from './description';
 import {
   getCurrentCommitSHA,
   getUserEmail,
@@ -165,11 +170,11 @@ async function closeDescriptionEditor(doc: vscode.TextDocument): Promise<void> {
 }
 
 /**
- * Prompt for a description. The inline box stays the fast path for a one-line
- * note; the button escapes to a real editor when the text needs line breaks,
- * lists or links, which `showInputBox` cannot accept (Enter submits it).
+ * Show the single-line box, reporting which way the user left it. The box is
+ * the fast path; its pencil button is the escape to a real editor, because
+ * `showInputBox` cannot accept a newline (Enter submits it).
  */
-async function promptDescription(initial: string): Promise<string | undefined> {
+function askInlineDescription(initial: string): Promise<InlineOutcome> {
   const box = vscode.window.createInputBox();
   box.title = 'Description (optional)';
   box.value = initial;
@@ -181,40 +186,32 @@ async function promptDescription(initial: string): Promise<string | undefined> {
   };
   box.buttons = [editButton];
 
-  try {
-    const action = await new Promise<
-      { kind: 'accept'; value: string } | { kind: 'editor'; value: string } | undefined
-    >((resolve) => {
-      let settled = false;
-      const settle = (
-        v: { kind: 'accept'; value: string } | { kind: 'editor'; value: string } | undefined,
-      ) => {
-        if (settled) return;
-        settled = true;
-        resolve(v);
-      };
-      box.onDidAccept(() => settle({ kind: 'accept', value: box.value }));
-      box.onDidTriggerButton(() => settle({ kind: 'editor', value: box.value }));
-      box.onDidHide(() => settle(undefined));
-      box.show();
-    });
+  return new Promise<InlineOutcome>((resolve) => {
+    let settled = false;
+    const settle = (v: InlineOutcome) => {
+      if (settled) return;
+      settled = true;
+      box.hide();
+      box.dispose();
+      resolve(v);
+    };
+    box.onDidAccept(() => settle({ kind: 'accept', value: box.value }));
+    box.onDidTriggerButton(() => settle({ kind: 'editor', value: box.value }));
+    box.onDidHide(() => settle(undefined));
+    box.show();
+  });
+}
 
-    if (!action) return undefined;
-    box.hide();
-    if (action.kind === 'accept') return action.value.trim();
-
-    const edited = await editDescriptionInEditor(action.value);
-    if (edited !== undefined) return edited;
-    // Closing the scratch buffer means "I didn't write one", not "throw the
-    // task away" — keep what was already typed and say so, rather than
-    // aborting the whole flow with nothing to show for it.
-    vscode.window.showInformationMessage(
-      'git-tasks: description editor closed without saving — description left unchanged.',
-    );
-    return action.value.trim();
-  } finally {
-    box.dispose();
-  }
+/**
+ * Prompt for a description. The branching lives in `resolveDescription` so it
+ * can be tested without an editor; this only supplies the effects.
+ */
+function promptDescription(initial: string): Promise<string | undefined> {
+  return resolveDescription(initial, {
+    askInline: askInlineDescription,
+    askEditor: editDescriptionInEditor,
+    notify: (message) => void vscode.window.showInformationMessage(message),
+  });
 }
 
 /**

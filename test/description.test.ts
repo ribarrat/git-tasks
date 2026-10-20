@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   DESCRIPTION_HEADER,
+  DescriptionEffects,
+  EDITOR_DISMISSED_MESSAGE,
+  InlineOutcome,
+  resolveDescription,
   escapeHtml,
   preserveLineBreaks,
   stripDescriptionHeader,
@@ -68,5 +72,79 @@ describe('escapeHtml', () => {
   it('leaves markdown links intact', () => {
     const link = '[docs](https://example.com/d)';
     expect(escapeHtml(link)).toBe(link);
+  });
+});
+
+describe('resolveDescription', () => {
+  interface Calls {
+    editorOpenedWith: string[];
+    notified: string[];
+  }
+
+  const effects = (
+    inline: InlineOutcome,
+    editorResult?: string | undefined,
+  ): { fx: DescriptionEffects; calls: Calls } => {
+    const calls: Calls = { editorOpenedWith: [], notified: [] };
+    return {
+      calls,
+      fx: {
+        askInline: async () => inline,
+        askEditor: async (initial: string) => {
+          calls.editorOpenedWith.push(initial);
+          return editorResult;
+        },
+        notify: (m: string) => calls.notified.push(m),
+      },
+    };
+  };
+
+  it('returns the trimmed inline value when accepted', async () => {
+    const { fx, calls } = effects({ kind: 'accept', value: '  short note  ' });
+    await expect(resolveDescription('', fx)).resolves.toBe('short note');
+    expect(calls.editorOpenedWith).toEqual([]);
+  });
+
+  it('returns empty string when the box is accepted empty', async () => {
+    const { fx } = effects({ kind: 'accept', value: '   ' });
+    await expect(resolveDescription('', fx)).resolves.toBe('');
+  });
+
+  it('cancels the caller when the inline box is dismissed', async () => {
+    const { fx, calls } = effects(undefined);
+    await expect(resolveDescription('prior', fx)).resolves.toBeUndefined();
+    expect(calls.editorOpenedWith).toEqual([]);
+    expect(calls.notified).toEqual([]);
+  });
+
+  it('hands the editor what was already typed', async () => {
+    const { fx, calls } = effects({ kind: 'editor', value: 'half a thought' }, 'finished');
+    await resolveDescription('', fx);
+    expect(calls.editorOpenedWith).toEqual(['half a thought']);
+  });
+
+  it('returns what the editor saved', async () => {
+    const body = 'line one\n\n- a\n- b';
+    const { fx } = effects({ kind: 'editor', value: 'seed' }, body);
+    await expect(resolveDescription('', fx)).resolves.toBe(body);
+  });
+
+  it('accepts an empty save as clearing the description', async () => {
+    const { fx, calls } = effects({ kind: 'editor', value: 'seed' }, '');
+    await expect(resolveDescription('', fx)).resolves.toBe('');
+    expect(calls.notified).toEqual([]);
+  });
+
+  // The regression that shipped once: a dismissed editor was read as "cancel",
+  // which aborted the whole add flow and discarded the task.
+  it('keeps the typed text and warns when the editor closes unsaved', async () => {
+    const { fx, calls } = effects({ kind: 'editor', value: '  kept  ' }, undefined);
+    await expect(resolveDescription('', fx)).resolves.toBe('kept');
+    expect(calls.notified).toEqual([EDITOR_DISMISSED_MESSAGE]);
+  });
+
+  it('never cancels the caller once the editor has been opened', async () => {
+    const { fx } = effects({ kind: 'editor', value: '' }, undefined);
+    await expect(resolveDescription('', fx)).resolves.not.toBeUndefined();
   });
 });
